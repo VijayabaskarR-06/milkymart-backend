@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MilkyMart — Admin</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="live.css" />
+</head>
+<body>
+  <!-- Login gate (shown until an admin token is present) -->
+  <div class="login-screen" id="loginScreen" hidden>
+    <form class="login-card" id="loginForm">
+      <div class="login-logo">
+        <svg viewBox="0 0 24 24" fill="none"><path d="M9 2H15M10 2V5L8 8V21A1 1 0 009 22H15A1 1 0 0016 21V8L14 5V2M8 11H16" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/></svg>
+      </div>
+      <h1>MilkyMart Admin</h1>
+      <p>Sign in to manage orders, products and customers.</p>
+      <label for="loginEmail">Email</label>
+      <input id="loginEmail" type="email" autocomplete="username" value="admin@milkymart.app" required />
+      <label for="loginPassword">Password</label>
+      <input id="loginPassword" type="password" autocomplete="current-password" value="milkymart123" required />
+      <button type="submit" class="btn btn-primary login-submit">Sign in</button>
+      <p class="login-error" id="loginError" hidden></p>
+      <p class="login-hint">Demo: admin@milkymart.app / milkymart123</p>
+    </form>
+  </div>
+
+  <div class="app" id="app" hidden>
+    <!-- Sidebar -->
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <div class="brand-logo" title="MilkyMart">
+          <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M9 2H15M10 2V5L8 8V21A1 1 0 009 22H15A1 1 0 0016 21V8L14 5V2M8 11H16" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <div class="brand-info">
+          <div class="brand-name">MilkyMart</div>
+          <div class="brand-sub">Daily Admin</div>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <a href="#" class="nav-item active" data-section="home" title="Home">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M3 12L12 4L21 12M5 10V20H19V10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="nav-label">Home</span>
+        </a>
+        <a href="#" class="nav-item" data-section="user" title="User">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M20 21V19A4 4 0 0016 15H8A4 4 0 004 19V21M12 11A4 4 0 1012 3A4 4 0 0012 11Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="nav-label">User</span>
+        </a>
+        <a href="#" class="nav-item" data-section="rider" title="Rider">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none"><circle cx="5.5" cy="17.5" r="3.5" stroke="currentColor" stroke-width="1.7"/><circle cx="18.5" cy="17.5" r="3.5" stroke="currentColor" stroke-width="1.7"/><path d="M15 5H17.5L19 9M9 17.5H15M12 17.5L15 9H10.5L8 12.5L12 14V17.5Z" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="nav-label">Rider</span>
+        </a>
+        <a href="#" class="nav-item" data-section="product" title="Product">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M20 7L12 3L4 7M20 7L12 11M20 7V17L12 21M12 11L4 7M12 11V21M4 7V17L12 21" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="nav-label">Product</span>
+        </a>
+        <a href="#" class="nav-item" data-section="order" title="Order">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M6 2L3 6V20A2 2 0 005 22H19A2 2 0 0021 20V6L18 2H6ZM3 6H21M16 10A4 4 0 018 10" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="nav-label">Order</span>
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="admin-chip">
+          <div class="avatar" id="adminAvatar">AD</div>
+          <div class="admin-info">
+            <div class="admin-name" id="adminName">Administrator</div>
+            <div class="admin-role">Administrator</div>
+          </div>
+          <button class="icon-btn icon-btn-flat" id="logoutBtn" title="Sign out" aria-label="Sign out">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M9 21H5A2 2 0 013 19V5A2 2 0 015 3H9M16 17L21 12L16 7M21 12H9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main">
+      <!-- Topbar -->
+      <header class="topbar">
+        <button class="icon-btn icon-btn-flat" id="collapseBtn" aria-label="Toggle sidebar" title="Toggle sidebar">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 6H20M4 12H20M4 18H20" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+        <div class="breadcrumb">
+          <span>MilkyMart</span>
+          <svg viewBox="0 0 24 24" fill="none"><path d="M9 6L15 12L9 18" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <strong id="crumbTitle">Home</strong>
+        </div>
+        <div class="topbar-actions">
+          <div class="date-chip">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M8 2V6M16 2V6M3 10H21M5 4H19A2 2 0 0121 6V20A2 2 0 0119 22H5A2 2 0 013 20V6A2 2 0 015 4Z" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            Monday, May 25, 2026
+          </div>
+        </div>
+      </header>
+
+      <!-- HOME -->
+      <section class="section active" id="section-home">
+        <div class="section-head">
+          <div>
+            <h1>Home</h1>
+            <p class="muted">Live snapshot of dairy orders across Kankarbagh.</p>
+          </div>
+        </div>
+        <div class="stats stats-3" data-stats="orders"></div>
+      </section>
+
+      <!-- USER -->
+      <section class="section" id="section-user">
+        <div class="section-head">
+          <div>
+            <h1>Users</h1>
+            <p class="muted">110 customers subscribed · showing recent <span id="userCount">0</span>.</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn btn-primary">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M12 5V19M5 12H19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              Add user
+            </button>
+          </div>
+        </div>
+
+        <div class="card no-pad">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Mobile number</th>
+                <th class="right">Wallet balance</th>
+                <th class="right">Recharge history</th>
+              </tr>
+            </thead>
+            <tbody id="userTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- RIDER -->
+      <section class="section" id="section-rider">
+        <div class="section-head">
+          <div>
+            <h1>Riders</h1>
+            <p class="muted"><span id="riderCount">0</span> delivery riders on the morning route.</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn btn-primary">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M12 5V19M5 12H19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              Add rider
+            </button>
+          </div>
+        </div>
+
+        <div class="card no-pad">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Rider name</th>
+                <th>Mobile number</th>
+                <th class="right">Total customers</th>
+              </tr>
+            </thead>
+            <tbody id="riderTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- PRODUCT -->
+      <section class="section" id="section-product">
+        <div class="section-head">
+          <div>
+            <h1>Products</h1>
+            <p class="muted"><span id="productCount">0</span> dairy products available for delivery.</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn btn-primary">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M12 5V19M5 12H19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              Add product
+            </button>
+          </div>
+        </div>
+
+        <div class="product-grid" id="productGrid"></div>
+      </section>
+
+      <!-- ORDER -->
+      <section class="section" id="section-order">
+        <div class="section-head">
+          <div>
+            <h1>Orders</h1>
+            <p class="muted">Live orders from the Milky Mart app — change a status and the customer is notified instantly.</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn btn-ghost" id="refreshOrders">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M4 12A8 8 0 0116 5.3L20 9M20 4V9H15M20 12A8 8 0 018 18.7L4 15M4 20V15H9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Refresh
+            </button>
+          </div>
+        </div>
+        <div class="stats stats-3" data-stats="orders"></div>
+        <div class="card no-pad" style="margin-top:20px">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Order</th>
+                <th>Customer</th>
+                <th>Items</th>
+                <th class="right">Total</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="orderTable"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <!-- Add product modal -->
+  <div class="modal" id="productModal" aria-hidden="true">
+    <div class="modal-backdrop" data-close-product></div>
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <header class="modal-head">
+        <div><h3>Add product</h3><p class="muted">New products appear in the app instantly.</p></div>
+        <button class="icon-btn icon-btn-flat" data-close-product aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="modal-body">
+        <form id="productForm" class="product-form">
+          <label>Name<input name="name" required placeholder="Fresh Paneer" /></label>
+          <label>Product ID<input name="id" required placeholder="fresh-paneer" pattern="[a-zA-Z0-9\- ]+" /></label>
+          <label>Size<input name="size" value="500 ml" /></label>
+          <label>Category<input name="category" value="Milk" /></label>
+          <label>Price ₹<input name="price" type="number" min="1" required placeholder="35" /></label>
+          <label>MRP ₹<input name="mrp" type="number" min="1" placeholder="40" /></label>
+          <label class="full">Description<input name="description" placeholder="Short description" /></label>
+          <p class="login-error" id="productError" hidden></p>
+          <button type="submit" class="btn btn-primary full">Save product</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recharge history modal -->
+  <div class="modal" id="rechargeModal" aria-hidden="true">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card" role="dialog" aria-modal="true">
+      <header class="modal-head">
+        <div>
+          <h3 id="modalTitle">Recharge history</h3>
+          <p class="muted" id="modalSub">—</p>
+        </div>
+        <button class="icon-btn icon-btn-flat" data-close aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="modal-body" id="modalBody"></div>
+    </div>
+  </div>
+
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

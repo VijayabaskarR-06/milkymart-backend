@@ -1,0 +1,78 @@
+/* Styles for the live-API additions: login gate, orders table, product form. */
+
+/* An explicit display value beats the `hidden` attribute, so restore it. */
+[hidden] { display: none !important; }
+
+.login-screen {
+  position: fixed; inset: 0; z-index: 100;
+  display: grid; place-items: center; padding: 24px;
+  background: radial-gradient(circle at 30% 20%, #1e293b, #0f172a);
+}
+.login-card {
+  width: min(100%, 380px); padding: 34px 30px;
+  background: #fff; border-radius: 18px;
+  box-shadow: 0 30px 80px rgba(2, 6, 23, .5);
+  display: flex; flex-direction: column;
+}
+.login-logo {
+  width: 52px; height: 52px; display: grid; place-items: center;
+  color: #fff; background: #0f172a; border-radius: 14px; margin-bottom: 16px;
+}
+.login-logo svg { width: 26px; height: 26px; }
+.login-card h1 { margin: 0 0 6px; font-size: 22px; }
+.login-card > p { margin: 0 0 22px; color: #64748b; font-size: 14px; }
+.login-card label { font-size: 12px; font-weight: 600; color: #334155; margin-bottom: 6px; }
+.login-card input {
+  height: 44px; padding: 0 13px; margin-bottom: 15px;
+  border: 1.5px solid #e2e8f0; border-radius: 10px; font-size: 14px; font-family: inherit;
+}
+.login-card input:focus { outline: none; border-color: #1e293b; }
+.login-submit { justify-content: center; height: 46px; margin-top: 4px; }
+.login-error { margin: 12px 0 0; color: #dc2626; font-size: 13px; font-weight: 600; }
+.login-hint { margin: 16px 0 0; text-align: center; color: #94a3b8; font-size: 12px; }
+
+/* Sign-out button sits in the sidebar chip */
+.admin-chip { position: relative; }
+#logoutBtn { margin-left: auto; }
+
+/* Status pills + selector in the orders table */
+.status-select {
+  appearance: none; padding: 6px 26px 6px 12px; border-radius: 999px;
+  border: 1.5px solid transparent; font-size: 12px; font-weight: 700; cursor: pointer;
+  font-family: inherit;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none'%3E%3Cpath d='M6 9l6 6 6-6' stroke='%23334155' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 8px center;
+}
+.status-Confirmed         { background-color: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+.status-Packed            { background-color: #f5f3ff; color: #6d28d9; border-color: #ddd6fe; }
+.status-Out.for.delivery,
+.status-Outfordelivery    { background-color: #fffbeb; color: #b45309; border-color: #fde68a; }
+.status-Delivered         { background-color: #ecfdf5; color: #047857; border-color: #a7f3d0; }
+.status-Cancelled         { background-color: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+
+.order-items { color: #64748b; font-size: 12px; max-width: 260px; }
+.order-id { font-family: 'JetBrains Mono', monospace; font-weight: 600; }
+
+.btn-ghost { background: #fff; border: 1.5px solid #e2e8f0; color: #334155; }
+.btn-ghost:hover { background: #f8fafc; }
+
+/* Add-product form grid */
+.product-form { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 14px; }
+.product-form label { display: flex; flex-direction: column; gap: 5px; font-size: 12px; font-weight: 600; color: #334155; }
+.product-form input {
+  height: 40px; padding: 0 12px; border: 1.5px solid #e2e8f0; border-radius: 9px;
+  font-size: 14px; font-family: inherit;
+}
+.product-form input:focus { outline: none; border-color: #1e293b; }
+.product-form .full { grid-column: 1 / -1; }
+.product-form button.full { justify-content: center; height: 44px; }
+
+/* Loading + toast */
+.row-empty td { padding: 26px; text-align: center; color: #94a3b8; }
+.admin-toast {
+  position: fixed; z-index: 120; left: 50%; bottom: 26px; transform: translate(-50%, 20px);
+  padding: 12px 20px; border-radius: 12px; background: #0f172a; color: #fff;
+  font-size: 13px; font-weight: 600; opacity: 0; visibility: hidden; transition: .2s;
+  box-shadow: 0 16px 40px rgba(2, 6, 23, .4);
+}
+.admin-toast.show { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
