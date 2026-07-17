@@ -1,5 +1,7 @@
 import express from 'express'
 import cors from 'cors'
+import helmet from 'helmet'
+import rateLimit from 'express-rate-limit'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import appRoutes from './routes.app.js'
@@ -9,9 +11,47 @@ import { seedDatabase } from './migrate.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const app = express()
+app.set('trust proxy', 1) // behind Render's proxy — needed for correct client IPs
 
-app.use(cors()) // Public API — the mobile app ships as a native origin.
+// Security headers. CSP is relaxed only for the self-hosted admin page's inline
+// styles/handlers; the JSON API sends no HTML so it is unaffected.
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'", "'unsafe-inline'"],
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+        fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+        imgSrc: ["'self'", 'data:'],
+        connectSrc: ["'self'"],
+      },
+    },
+    crossOriginResourcePolicy: { policy: 'cross-origin' },
+  }),
+)
+
+// CORS: the native mobile app sends no Origin (allowed); browser callers must be
+// in CORS_ORIGINS (comma-separated) when that is set, else all origins are allowed.
+const allowOrigins = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean)
+app.use(
+  cors({
+    origin(origin, cb) {
+      if (!origin || allowOrigins.length === 0 || allowOrigins.includes(origin)) return cb(null, true)
+      cb(new Error('Not allowed by CORS'))
+    },
+  }),
+)
+
 app.use(express.json({ limit: '256kb' }))
+
+// Throttle auth + admin-login endpoints against brute force (production only, so
+// local dev and the test suite aren't rate-limited).
+if (process.env.NODE_ENV === 'production') {
+  const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 40, standardHeaders: true, legacyHeaders: false })
+  app.use('/api/auth', authLimiter)
+  app.use('/api/admin/login', authLimiter)
+}
 
 app.get('/health', async (_req, res) => {
   try {

@@ -1,6 +1,12 @@
 import jwt from 'jsonwebtoken'
 
-const SECRET = process.env.JWT_SECRET || 'dev-only-secret-change-in-production'
+const DEV_SECRET = 'dev-only-secret-change-in-production'
+const SECRET = process.env.JWT_SECRET || DEV_SECRET
+
+// Never run production with the fallback secret — tokens would be forgeable.
+if (process.env.NODE_ENV === 'production' && SECRET === DEV_SECRET) {
+  throw new Error('JWT_SECRET must be set in production')
+}
 
 export const signToken = (payload) => jwt.sign(payload, SECRET, { expiresIn: '30d' })
 
