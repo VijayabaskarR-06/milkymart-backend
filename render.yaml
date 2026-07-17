@@ -9,16 +9,18 @@ services:
     startCommand: npm start
     healthCheckPath: /health
     envVars:
+      - key: NODE_ENV
+        value: production
       - key: DATABASE_URL
         fromDatabase:
           name: milkymart-db
           property: connectionString
       - key: JWT_SECRET
-        generateValue: true
+        generateValue: true          # strong random secret, unique per deploy
       - key: ADMIN_EMAIL
         value: admin@milkymart.app
       - key: ADMIN_PASSWORD
-        value: milkymart123
+        sync: false                  # Render prompts you to set this on deploy
       - key: NODE_VERSION
         value: "20"
 

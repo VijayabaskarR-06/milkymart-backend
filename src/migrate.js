@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
+import { randomBytes } from 'node:crypto'
 import bcrypt from 'bcryptjs'
 import { pool, query } from './db.js'
 
@@ -135,11 +136,24 @@ async function seedRows() {
 
 export async function seedAdmin() {
   const email = process.env.ADMIN_EMAIL || 'admin@milkymart.app'
-  const password = process.env.ADMIN_PASSWORD || 'milkymart123'
+  let password = process.env.ADMIN_PASSWORD
+  if (!password) {
+    if (process.env.NODE_ENV === 'production') {
+      // Never ship a known password in production. Generate one and surface it
+      // once in the logs so the operator can set ADMIN_PASSWORD deliberately.
+      password = randomBytes(9).toString('base64url')
+      console.warn(`[security] ADMIN_PASSWORD was not set — generated a one-time admin password: ${password}`)
+      console.warn('[security] Set ADMIN_PASSWORD in your environment to choose your own.')
+    } else {
+      password = 'milkymart123'
+    }
+  }
+  // Only (re)set the password when the admin doesn't already exist, so a rotated
+  // production password isn't overwritten by the seed default on the next boot.
   const hash = bcrypt.hashSync(password, 10)
   await query(
     `INSERT INTO admins (email, password_hash, name) VALUES ($1,$2,'Administrator')
-     ON CONFLICT (email) DO UPDATE SET password_hash = EXCLUDED.password_hash`,
+     ON CONFLICT (email) DO NOTHING`,
     [email, hash],
   )
 }
