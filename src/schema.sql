@@ -10,6 +10,11 @@ CREATE TABLE IF NOT EXISTS users (
   UNIQUE (role, phone)
 );
 
+-- Riders need admin approval before they can work; customers are always approved.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS approved BOOLEAN NOT NULL DEFAULT true;
+-- Each customer gets one permanent delivery partner (a rider), set by the admin.
+ALTER TABLE users ADD COLUMN IF NOT EXISTS assigned_rider_id INTEGER REFERENCES users(id) ON DELETE SET NULL;
+
 CREATE TABLE IF NOT EXISTS products (
   id          TEXT PRIMARY KEY,
   name        TEXT NOT NULL,

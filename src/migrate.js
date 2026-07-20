@@ -26,7 +26,9 @@ const CUSTOMERS = [
 ]
 
 const RIDERS = [
-  { phone: '9998887770', name: 'Rohan Kumar', wallet: 840 },
+  { phone: '9998887770', name: 'Rohan Kumar', wallet: 840, approved: true },
+  // A second rider left pending to demo the admin approval flow.
+  { phone: '9998887771', name: 'Vikram Yadav', wallet: 0, approved: false },
 ]
 
 export async function ensureSchema() {
@@ -78,8 +80,8 @@ async function seedRows() {
   }
   for (const r of RIDERS) {
     const { rows } = await query(
-      `INSERT INTO users (role, phone, name, wallet_balance) VALUES ('rider',$1,$2,$3) RETURNING id`,
-      [r.phone, r.name, r.wallet],
+      `INSERT INTO users (role, phone, name, wallet_balance, approved) VALUES ('rider',$1,$2,$3,$4) RETURNING id`,
+      [r.phone, r.name, r.wallet, r.approved],
     )
     userIds[r.phone] = rows[0].id
   }
@@ -87,25 +89,28 @@ async function seedRows() {
   const aarav = userIds['9876543210']
   const rohan = userIds['9998887770']
 
+  // Give the demo customers a permanent delivery partner (Rohan).
+  await query(`UPDATE users SET assigned_rider_id=$1 WHERE role='customer'`, [rohan])
+
   await query(
     `INSERT INTO addresses (user_id, label, detail) VALUES
-     ($1,'Home','22, Green Park Road, Bengaluru 560003'),
-     ($1,'Work','4th Floor, Orion Tech Park, Whitefield, Bengaluru 560066')`,
+     ($1,'Home','H.No 22, Road 10, Kankarbagh, Patna 800020'),
+     ($1,'Work','3rd Floor, Maurya Lok Complex, Dak Bungalow Road, Patna 800001')`,
     [aarav],
   )
 
   await query(
     `INSERT INTO orders (id, user_id, customer_name, phone, status, total, item_count, items, address, slot, payment, date, rider_id)
      VALUES
-     ('MM1048',$1,'Aarav Sharma','+91 98765 43210','Out for delivery',136,2,$2,'22, Green Park Road, Bengaluru','6:00 – 8:00 AM','Prepaid','17 Jul 2026',$3),
-     ('MM1033',$1,'Aarav Sharma','+91 98765 43210','Delivered',100,3,$4,'22, Green Park Road, Bengaluru','6:00 – 8:00 AM','Wallet','15 Jul 2026',$3)`,
+     ('MM1048',$1,'Aarav Sharma','+91 98765 43210','Out for delivery',136,2,$2,'H.No 22, Road 10, Kankarbagh, Patna 800020','6:00 – 8:00 AM','Cash on delivery','17 Jul 2026',$3),
+     ('MM1033',$1,'Aarav Sharma','+91 98765 43210','Delivered',100,3,$4,'H.No 22, Road 10, Kankarbagh, Patna 800020','6:00 – 8:00 AM','Wallet','15 Jul 2026',$3)`,
     [aarav, JSON.stringify(['2 × Farm Fresh Milk']), rohan, JSON.stringify(['1 × Nandini Toned Milk', '2 × Full Cream Milk'])],
   )
 
   await query(
     `INSERT INTO orders (id, user_id, customer_name, phone, status, total, item_count, items, address, slot, payment, date, rider_id)
      VALUES
-     ('MM1051',$1,'Meera Nair','+91 98761 22882','Confirmed',60,2,$2,'16, Lake View Avenue, Bengaluru','6:00 – 8:00 AM','Cash on delivery','17 Jul 2026',$3)`,
+     ('MM1051',$1,'Meera Nair','+91 98761 22882','Confirmed',60,2,$2,'204, Boring Road, Patna 800001','6:00 – 8:00 AM','Cash on delivery','17 Jul 2026',$3)`,
     [userIds['9876122882'], JSON.stringify(['1 × Milma Prime', '1 × Nandini Toned Milk']), rohan],
   )
 

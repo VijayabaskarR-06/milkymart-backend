@@ -177,21 +177,47 @@ async function loadOrders() {
   }
 }
 
+let approvedRidersCache = []
+
 async function loadCustomers() {
   const tbody = $('#userTable')
   try {
-    const users = (customersCache = await api('/customers'))
+    // Load customers and the approved-rider list together for the partner dropdown.
+    const [users, riders] = await Promise.all([api('/customers'), api('/riders')])
+    customersCache = users
+    approvedRidersCache = riders.filter((r) => r.approved)
     $('#userCount').textContent = users.length
+    const options = (selectedId) =>
+      `<option value="">Unassigned</option>` +
+      approvedRidersCache
+        .map((r) => `<option value="${r.id}" ${r.id === selectedId ? 'selected' : ''}>${escapeHtml(r.name)}</option>`)
+        .join('')
     tbody.innerHTML = users.map((u, i) => `
       <tr>
         <td><div class="cust"><div class="avatar" style="background:#1e293b">${escapeHtml(u.initials)}</div><div class="cust-name">${escapeHtml(u.name)}</div></div></td>
         <td class="mono-cell">${escapeHtml(u.mobile)}</td>
+        <td><select class="partner-select" data-customer="${u.id}">${options(u.assignedRiderId)}</select></td>
         <td class="right"><span class="balance num ${u.wallet < 200 ? 'low' : ''}">${fmtRupee(u.wallet)}</span></td>
         <td class="right"><button class="btn-link" data-recharge="${i}">View (${u.recharges.length})</button></td>
       </tr>`).join('')
     tbody.querySelectorAll('[data-recharge]').forEach((btn) => btn.addEventListener('click', () => openRecharge(parseInt(btn.dataset.recharge, 10))))
+    tbody.querySelectorAll('.partner-select').forEach((sel) =>
+      sel.addEventListener('change', async () => {
+        try {
+          await api(`/customers/${sel.dataset.customer}/assign-rider`, {
+            method: 'POST',
+            body: { riderId: sel.value ? Number(sel.value) : null },
+          })
+          toast(sel.value ? 'Delivery partner assigned' : 'Delivery partner cleared')
+          loadRiders()
+        } catch (e) {
+          toast(e.message)
+          loadCustomers()
+        }
+      }),
+    )
   } catch (e) {
-    tbody.innerHTML = `<tr class="row-empty"><td colspan="4">${escapeHtml(e.message)}</td></tr>`
+    tbody.innerHTML = `<tr class="row-empty"><td colspan="5">${escapeHtml(e.message)}</td></tr>`
   }
 }
 
@@ -204,13 +230,28 @@ async function loadRiders() {
       <tr>
         <td><div class="cust"><div class="avatar" style="background:#0f766e">${escapeHtml(r.initials)}</div><div class="cust-name">${escapeHtml(r.name)}</div></div></td>
         <td class="mono-cell">${escapeHtml(r.mobile)}</td>
+        <td class="right"><strong class="num">${fmtNum(r.customers)}</strong></td>
         <td class="right"><strong class="num">${fmtNum(r.delivered)} / ${fmtNum(r.assigned)}</strong></td>
+        <td>
+          ${r.approved
+            ? `<span class="rider-badge approved">Approved</span>`
+            : `<button class="btn btn-primary btn-approve" data-approve="${r.id}">Approve</button>`}
+        </td>
       </tr>`).join('')
-    // Header says "Total customers"; relabel to what we actually show.
-    const th = document.querySelector('#section-rider th.right')
-    if (th) th.textContent = 'Delivered / assigned'
+    tbody.querySelectorAll('[data-approve]').forEach((btn) =>
+      btn.addEventListener('click', async () => {
+        try {
+          await api(`/riders/${btn.dataset.approve}/approve`, { method: 'POST', body: { approved: true } })
+          toast('Rider approved — you can now assign them to customers')
+          loadRiders()
+          loadCustomers()
+        } catch (e) {
+          toast(e.message)
+        }
+      }),
+    )
   } catch (e) {
-    tbody.innerHTML = `<tr class="row-empty"><td colspan="3">${escapeHtml(e.message)}</td></tr>`
+    tbody.innerHTML = `<tr class="row-empty"><td colspan="5">${escapeHtml(e.message)}</td></tr>`
   }
 }
 
