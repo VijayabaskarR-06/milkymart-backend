@@ -1,6 +1,7 @@
 import { Router } from 'express'
 import { pool, query, one } from './db.js'
 import { requireUser, signToken } from './auth.js'
+import { checkServiceArea } from './serviceArea.js'
 
 const router = Router()
 const num = (v) => Number(v)
@@ -12,6 +13,7 @@ const publicUser = (u) => ({
   name: u.name,
   phone: `+91 ${String(u.phone).slice(-10)}`,
   wallet: num(u.wallet_balance),
+  approved: u.role === 'rider' ? Boolean(u.approved) : true,
 })
 
 // ---- Auth (demo OTP: any 6 digits) -------------------------------------------
@@ -32,9 +34,10 @@ router.post('/auth/verify-otp', async (req, res) => {
   let user = await one('SELECT * FROM users WHERE role=$1 AND phone=$2', [role, phone])
   if (!user) {
     const name = role === 'rider' ? 'Delivery Partner' : 'Milky Mart Customer'
+    // New riders start unapproved (admin must approve); customers are approved.
     user = await one(
-      'INSERT INTO users (role, phone, name, wallet_balance) VALUES ($1,$2,$3,$4) RETURNING *',
-      [role, phone, name, role === 'rider' ? 0 : 0],
+      'INSERT INTO users (role, phone, name, wallet_balance, approved) VALUES ($1,$2,$3,0,$4) RETURNING *',
+      [role, phone, name, role !== 'rider'],
     )
   }
   const token = signToken({ kind: 'user', id: user.id, role: user.role })
@@ -85,6 +88,8 @@ router.post('/addresses', requireUser, async (req, res) => {
   const label = String(req.body?.label || '').trim().slice(0, 20)
   const detail = String(req.body?.detail || '').trim().slice(0, 140)
   if (!label || !detail) return res.status(400).json({ error: 'Add both a label and a full address' })
+  const area = checkServiceArea(detail)
+  if (!area.ok) return res.status(422).json({ error: area.error, outOfArea: Boolean(area.outOfArea) })
   const row = await one('INSERT INTO addresses (user_id, label, detail) VALUES ($1,$2,$3) RETURNING id, label, detail', [req.auth.id, label, detail])
   res.status(201).json({ id: String(row.id), label: row.label, detail: row.detail })
 })
@@ -93,6 +98,8 @@ router.put('/addresses/:id', requireUser, async (req, res) => {
   const label = String(req.body?.label || '').trim().slice(0, 20)
   const detail = String(req.body?.detail || '').trim().slice(0, 140)
   if (!label || !detail) return res.status(400).json({ error: 'Add both a label and a full address' })
+  const area = checkServiceArea(detail)
+  if (!area.ok) return res.status(422).json({ error: area.error, outOfArea: Boolean(area.outOfArea) })
   const row = await one('UPDATE addresses SET label=$1, detail=$2 WHERE id=$3 AND user_id=$4 RETURNING id, label, detail', [label, detail, req.params.id, req.auth.id])
   if (!row) return res.status(404).json({ error: 'Address not found' })
   res.json({ id: String(row.id), label: row.label, detail: row.detail })
@@ -148,7 +155,7 @@ router.get('/orders/:id', requireUser, async (req, res) => {
 })
 
 router.post('/orders', requireUser, async (req, res) => {
-  const { items, address, slot, payment, date } = req.body || {}
+  const { items, address, slot, date } = req.body || {}
   if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'Your cart is empty' })
 
   const client = await pool.connect()
@@ -156,6 +163,10 @@ router.post('/orders', requireUser, async (req, res) => {
     await client.query('BEGIN')
     const { rows: userRows } = await client.query('SELECT * FROM users WHERE id=$1 FOR UPDATE', [req.auth.id])
     const user = userRows[0]
+
+    // The delivery address must be inside the service area.
+    const area = checkServiceArea(address)
+    if (!area.ok) throw httpError(422, area.error)
 
     // Recompute the total from live product prices — never trust the client's amount.
     let total = 0
@@ -170,22 +181,24 @@ router.post('/orders', requireUser, async (req, res) => {
       labels.push(`${qty} × ${product.name}`)
     }
 
-    if (payment === 'Wallet' && Number(user.wallet_balance) < total) {
-      throw httpError(400, 'Wallet balance is too low — pick another payment method')
-    }
+    // Payment is automatic: pay from the wallet when it covers the order, else
+    // it becomes Cash on Delivery. The client's requested method is ignored.
+    const payment = Number(user.wallet_balance) >= total ? 'Wallet' : 'Cash on delivery'
+    // Route to the customer's permanent delivery partner, if the admin set one.
+    const riderId = user.assigned_rider_id || null
 
     const id = await nextOrderId(client)
     const inserted = await client.query(
-      `INSERT INTO orders (id, user_id, customer_name, phone, status, total, item_count, items, address, slot, payment, date)
-       VALUES ($1,$2,$3,$4,'Confirmed',$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
-      [id, user.id, user.name, user.phone, total, itemCount, JSON.stringify(labels), address, slot, payment, date],
+      `INSERT INTO orders (id, user_id, customer_name, phone, status, total, item_count, items, address, slot, payment, date, rider_id)
+       VALUES ($1,$2,$3,$4,'Confirmed',$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
+      [id, user.id, user.name, user.phone, total, itemCount, JSON.stringify(labels), address, slot, payment, date, riderId],
     )
 
     if (payment === 'Wallet') {
       await client.query('UPDATE users SET wallet_balance = wallet_balance - $1 WHERE id=$2', [total, user.id])
       await client.query('INSERT INTO transactions (user_id, label, amount, type) VALUES ($1,$2,$3,$4)', [user.id, `Order #${id}`, total, 'debit'])
     }
-    await client.query('INSERT INTO notifications (user_id, title, body) VALUES ($1,$2,$3)', [user.id, 'Order confirmed', `Order #${id} has been placed successfully.`])
+    await client.query('INSERT INTO notifications (user_id, title, body) VALUES ($1,$2,$3)', [user.id, 'Order confirmed', `Order #${id} placed — paying by ${payment === 'Wallet' ? 'wallet' : 'cash on delivery'}.`])
 
     await client.query('COMMIT')
     res.status(201).json(orderForApp(inserted.rows[0]))
@@ -212,6 +225,8 @@ router.post('/notifications/read-all', requireUser, async (req, res) => {
 // ---- Rider -------------------------------------------------------------------
 router.get('/rider/deliveries', requireUser, async (req, res) => {
   if (req.auth.role !== 'rider') return res.status(403).json({ error: 'Riders only' })
+  const me = await one('SELECT approved FROM users WHERE id=$1', [req.auth.id])
+  if (!me?.approved) return res.status(403).json({ error: 'Your account is pending admin approval', pending: true })
   const { rows } = await query(
     `SELECT * FROM orders WHERE rider_id=$1 ORDER BY created_at DESC`,
     [req.auth.id],
@@ -221,6 +236,8 @@ router.get('/rider/deliveries', requireUser, async (req, res) => {
 
 router.patch('/rider/deliveries/:id', requireUser, async (req, res) => {
   if (req.auth.role !== 'rider') return res.status(403).json({ error: 'Riders only' })
+  const me = await one('SELECT approved FROM users WHERE id=$1', [req.auth.id])
+  if (!me?.approved) return res.status(403).json({ error: 'Your account is pending admin approval', pending: true })
   const order = await one('SELECT * FROM orders WHERE id=$1 AND rider_id=$2', [req.params.id, req.auth.id])
   if (!order) return res.status(404).json({ error: 'Delivery not found' })
 

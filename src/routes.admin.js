@@ -137,9 +137,11 @@ router.delete('/products/:id', async (req, res) => {
 // ---- Customers & riders ------------------------------------------------------
 router.get('/customers', async (_req, res) => {
   const { rows } = await query(`
-    SELECT u.*,
+    SELECT u.*, r.name AS rider_name,
       (SELECT COUNT(*) FROM orders o WHERE o.user_id=u.id)::int AS order_count
-    FROM users u WHERE u.role='customer' ORDER BY u.created_at
+    FROM users u
+    LEFT JOIN users r ON r.id = u.assigned_rider_id
+    WHERE u.role='customer' ORDER BY u.created_at
   `)
   const out = []
   for (const u of rows) {
@@ -154,28 +156,58 @@ router.get('/customers', async (_req, res) => {
       wallet: num(u.wallet_balance),
       orders: u.order_count,
       initials: initials(u.name),
+      assignedRiderId: u.assigned_rider_id,
+      assignedRiderName: u.rider_name || null,
       recharges: recharges.map((r) => ({ date: new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }), amount: num(r.amount), mode: r.type === 'credit' ? 'Credit' : 'Debit' })),
     })
   }
   res.json(out)
 })
 
+// Assign (or clear) a customer's permanent delivery partner. The rider must be
+// approved. Pass riderId: null to unassign.
+router.post('/customers/:id/assign-rider', async (req, res) => {
+  const riderId = req.body?.riderId ?? null
+  if (riderId !== null) {
+    const rider = await one(`SELECT id, approved FROM users WHERE id=$1 AND role='rider'`, [riderId])
+    if (!rider) return res.status(404).json({ error: 'Rider not found' })
+    if (!rider.approved) return res.status(400).json({ error: 'Approve the rider before assigning them' })
+  }
+  const customer = await one(`UPDATE users SET assigned_rider_id=$1 WHERE id=$2 AND role='customer' RETURNING id`, [riderId, req.params.id])
+  if (!customer) return res.status(404).json({ error: 'Customer not found' })
+  res.json({ ok: true })
+})
+
 router.get('/riders', async (_req, res) => {
   const { rows } = await query(`
     SELECT u.*,
       (SELECT COUNT(*) FROM orders o WHERE o.rider_id=u.id)::int AS assigned,
-      (SELECT COUNT(*) FROM orders o WHERE o.rider_id=u.id AND o.status='Delivered')::int AS delivered
-    FROM users u WHERE u.role='rider' ORDER BY u.created_at
+      (SELECT COUNT(*) FROM orders o WHERE o.rider_id=u.id AND o.status='Delivered')::int AS delivered,
+      (SELECT COUNT(*) FROM users c WHERE c.assigned_rider_id=u.id)::int AS customers
+    FROM users u WHERE u.role='rider' ORDER BY u.approved, u.created_at
   `)
   res.json(rows.map((u) => ({
     id: u.id,
     name: u.name,
     mobile: `+91 ${String(u.phone).slice(-10)}`,
     wallet: num(u.wallet_balance),
+    approved: Boolean(u.approved),
     assigned: u.assigned,
     delivered: u.delivered,
+    customers: u.customers,
     initials: initials(u.name),
   })))
+})
+
+// Approve (or revoke) a rider. Revoking also clears them from any customers.
+router.post('/riders/:id/approve', async (req, res) => {
+  const approved = req.body?.approved !== false
+  const rider = await one(`UPDATE users SET approved=$1 WHERE id=$2 AND role='rider' RETURNING id`, [approved, req.params.id])
+  if (!rider) return res.status(404).json({ error: 'Rider not found' })
+  if (!approved) {
+    await query('UPDATE users SET assigned_rider_id=NULL WHERE assigned_rider_id=$1', [req.params.id])
+  }
+  res.json({ ok: true })
 })
 
 function adminOrder(o) {
