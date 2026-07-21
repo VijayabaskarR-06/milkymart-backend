@@ -8,10 +8,14 @@ import appRoutes from './routes.app.js'
 import adminRoutes from './routes.admin.js'
 import { pool } from './db.js'
 import { seedDatabase } from './migrate.js'
+import { runMigrations } from './migrator.js'
+import { log, requestLogger } from './logger.js'
+import { webhookIsAuthentic, confirmTopup } from './payments.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const app = express()
 app.set('trust proxy', 1) // behind Render's proxy — needed for correct client IPs
+app.use(requestLogger)
 
 // Security headers. CSP is relaxed only for the self-hosted admin page's inline
 // styles/handlers; the JSON API sends no HTML so it is unaffected.
@@ -42,6 +46,37 @@ app.use(
     },
   }),
 )
+
+// Razorpay webhook needs the raw body to verify its signature, so it is mounted
+// before the JSON parser. It is a safety net: the app's confirm call normally
+// credits the wallet first, and crediting is idempotent either way.
+app.post('/api/webhooks/razorpay', express.raw({ type: '*/*', limit: '256kb' }), async (req, res) => {
+  const signature = req.headers['x-razorpay-signature']
+  if (!webhookIsAuthentic(req.body, signature)) {
+    log.warn('webhook.rejected', { provider: 'razorpay' })
+    return res.status(400).json({ error: 'Invalid signature' })
+  }
+  try {
+    const event = JSON.parse(req.body.toString('utf8'))
+    const entity = event?.payload?.payment?.entity
+    if (event?.event === 'payment.captured' && entity?.order_id) {
+      const userId = Number(entity?.notes?.userId)
+      if (userId) {
+        await confirmTopup(userId, {
+          razorpay_order_id: entity.order_id,
+          razorpay_payment_id: entity.id,
+          razorpay_signature: null,
+          trusted: true,
+        })
+      }
+    }
+    log.info('webhook.received', { event: event?.event })
+    res.json({ ok: true })
+  } catch (err) {
+    log.error('webhook.failed', { error: err.message })
+    res.status(200).json({ ok: true }) // ack anyway so Razorpay stops retrying
+  }
+})
 
 app.use(express.json({ limit: '256kb' }))
 
@@ -84,18 +119,24 @@ app.get('/', (_req, res) => {
 })
 
 // Central error handler so a thrown route never crashes the process.
-app.use((err, _req, res, _next) => {
-  console.error(err)
+app.use((err, req, res, _next) => {
+  log.error('unhandled', { error: err.message, stack: err.stack?.split('\n')[1]?.trim(), path: req.originalUrl })
   res.status(500).json({ error: 'Something went wrong on the server' })
 })
 
+// Never let an unexpected rejection take the process down silently.
+process.on('unhandledRejection', (reason) => log.error('unhandledRejection', { reason: String(reason) }))
+process.on('uncaughtException', (err) => log.error('uncaughtException', { error: err.message }))
+
 const port = process.env.PORT || 4000
 
-// Create tables and seed the demo data on first boot, so a fresh cloud deploy is
-// immediately usable with no manual migration step.
-seedDatabase()
-  .then(({ seeded }) => console.log(seeded ? 'Database seeded.' : 'Database ready.'))
-  .catch((err) => console.error('Startup migration failed:', err))
+// Apply pending migrations, then seed demo data on a fresh database, so a new
+// cloud deploy comes up ready with no manual step.
+runMigrations()
+  .then(({ ran, total }) => log.info('migrations.done', { applied: ran, total }))
+  .then(() => seedDatabase())
+  .then(({ seeded }) => log.info(seeded ? 'db.seeded' : 'db.ready'))
+  .catch((err) => log.error('startup.failed', { error: err.message }))
   .finally(() => {
-    app.listen(port, () => console.log(`Milky Mart API listening on :${port}`))
+    app.listen(port, () => log.info('server.listening', { port }))
   })

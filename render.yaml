@@ -24,6 +24,36 @@ services:
       - key: NODE_VERSION
         value: "20"
 
+      # ---- Optional integrations -------------------------------------------
+      # Leave these blank and the app runs in demo mode (any 6-digit OTP,
+      # instant wallet top-ups). Fill them in to go live — no code change needed.
+      #
+      # SMS OTP: set SMS_PROVIDER to "msg91" or "twilio", then its credentials.
+      - key: SMS_PROVIDER
+        sync: false
+      - key: MSG91_AUTH_KEY
+        sync: false
+      - key: MSG91_TEMPLATE_ID
+        sync: false
+      - key: MSG91_SENDER_ID
+        sync: false
+      - key: TWILIO_ACCOUNT_SID
+        sync: false
+      - key: TWILIO_AUTH_TOKEN
+        sync: false
+      - key: TWILIO_FROM
+        sync: false
+      # Payments: set both keys to require a real Razorpay payment for top-ups.
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      # Restrict browser callers (comma-separated). Blank = allow all.
+      - key: CORS_ORIGINS
+        sync: false
+
 databases:
   - name: milkymart-db
     plan: free

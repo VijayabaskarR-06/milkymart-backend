@@ -165,7 +165,10 @@ export async function seedAdmin() {
 
 // Only run as a script (node src/migrate.js), not when imported by the server.
 if (import.meta.url === `file://${process.argv[1]}`) {
-  seed()
+  const { runMigrations } = await import('./migrator.js')
+  runMigrations()
+    .then(({ ran, total }) => console.log(`Migrations: ${ran} applied (${total} total).`))
+    .then(() => seed())
     .then(() => {
       console.log('Seed complete.')
       console.log(`  Admin login: ${process.env.ADMIN_EMAIL || 'admin@milkymart.app'} / ${process.env.ADMIN_PASSWORD || 'milkymart123'}`)
