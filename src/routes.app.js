@@ -5,6 +5,8 @@ import { checkServiceArea } from './serviceArea.js'
 import { validate, schemas } from './validate.js'
 import { issueOtp, verifyOtp as checkOtp, isLiveOtp } from './otp.js'
 import { isLivePayments, createTopupOrder, confirmTopup } from './payments.js'
+import { firebaseConfigured, verifyFirebaseIdToken } from './firebase.js'
+import { notifyUser } from './notify.js'
 import { log } from './logger.js'
 
 const router = Router()
@@ -22,7 +24,42 @@ const publicUser = (u) => ({
 
 // Lets the app know which integrations are live so it can adapt its UI.
 router.get('/config', (_req, res) => {
-  res.json({ liveOtp: isLiveOtp, livePayments: isLivePayments })
+  res.json({
+    liveOtp: isLiveOtp,
+    livePayments: isLivePayments,
+    firebaseAuth: firebaseConfigured,
+    push: firebaseConfigured,
+  })
+})
+
+// Finds or creates the account for a verified phone number and issues our token.
+async function issueSession(phone, role) {
+  let user = await one('SELECT * FROM users WHERE role=$1 AND phone=$2', [role, phone])
+  if (!user) {
+    const name = role === 'rider' ? 'Delivery Partner' : 'Milky Mart Customer'
+    // New riders start unapproved (admin must approve); customers are approved.
+    user = await one(
+      'INSERT INTO users (role, phone, name, wallet_balance, approved) VALUES ($1,$2,$3,0,$4) RETURNING *',
+      [role, phone, name, role !== 'rider'],
+    )
+  }
+  const token = signToken({ kind: 'user', id: user.id, role: user.role, tv: user.token_version ?? 0 })
+  return { token, user: publicUser(user) }
+}
+
+// Firebase Phone Auth: the app signs in with Firebase, then exchanges the
+// resulting ID token for a Milky Mart session. Used when firebaseAuth is true.
+router.post('/auth/firebase', async (req, res) => {
+  const idToken = String(req.body?.idToken || '')
+  const role = req.body?.role === 'rider' ? 'rider' : 'customer'
+  if (!idToken) return res.status(400).json({ error: 'Missing sign-in token' })
+
+  const verified = await verifyFirebaseIdToken(idToken)
+  if (!verified.ok) return res.status(401).json({ error: verified.error })
+
+  const session = await issueSession(verified.phone, role)
+  log.info('auth.firebase', { role, phone: verified.phone.slice(-4) })
+  res.json(session)
 })
 
 // ---- Auth --------------------------------------------------------------------
@@ -41,26 +78,37 @@ router.post('/auth/request-otp', validate(schemas.requestOtp), async (req, res, 
 
 router.post('/auth/verify-otp', validate(schemas.verifyOtp), async (req, res) => {
   const { phone, otp, role } = req.valid
-
   const check = await checkOtp(phone, otp)
   if (!check.ok) return res.status(401).json({ error: check.error })
-
-  let user = await one('SELECT * FROM users WHERE role=$1 AND phone=$2', [role, phone])
-  if (!user) {
-    const name = role === 'rider' ? 'Delivery Partner' : 'Milky Mart Customer'
-    // New riders start unapproved (admin must approve); customers are approved.
-    user = await one(
-      'INSERT INTO users (role, phone, name, wallet_balance, approved) VALUES ($1,$2,$3,0,$4) RETURNING *',
-      [role, phone, name, role !== 'rider'],
-    )
-  }
-  const token = signToken({ kind: 'user', id: user.id, role: user.role, tv: user.token_version ?? 0 })
-  res.json({ token, user: publicUser(user) })
+  res.json(await issueSession(phone, role))
 })
 
-// Real logout: bumping token_version invalidates every token issued so far.
+// Real logout: bumping token_version invalidates every token issued so far, and
+// the device stops receiving push for this account.
 router.post('/auth/logout', requireUser, async (req, res) => {
+  const token = req.body?.deviceToken
+  if (token) await query('DELETE FROM device_tokens WHERE token=$1', [token])
   await query('UPDATE users SET token_version = token_version + 1 WHERE id=$1', [req.auth.id])
+  res.json({ ok: true })
+})
+
+// ---- Push notification devices -----------------------------------------------
+router.post('/devices', requireUser, async (req, res) => {
+  const token = String(req.body?.token || '').trim()
+  const platform = String(req.body?.platform || 'android').slice(0, 20)
+  if (!token) return res.status(400).json({ error: 'Missing device token' })
+  // A device can move between accounts (shared phone), so the token maps to the
+  // most recent user that registered it.
+  await query(
+    `INSERT INTO device_tokens (user_id, token, platform) VALUES ($1,$2,$3)
+     ON CONFLICT (token) DO UPDATE SET user_id=EXCLUDED.user_id, last_seen=now()`,
+    [req.auth.id, token, platform],
+  )
+  res.json({ ok: true })
+})
+
+router.delete('/devices/:token', requireUser, async (req, res) => {
+  await query('DELETE FROM device_tokens WHERE token=$1 AND user_id=$2', [req.params.token, req.auth.id])
   res.json({ ok: true })
 })
 
@@ -308,7 +356,11 @@ router.patch('/rider/deliveries/:id', requireUser, async (req, res) => {
 
   const updated = await one('UPDATE orders SET status=$1 WHERE id=$2 RETURNING *', [next, order.id])
   if (updated.user_id) {
-    await query('INSERT INTO notifications (user_id, title, body) VALUES ($1,$2,$3)', [updated.user_id, 'Delivery update', `Order #${updated.id} is now ${next.toLowerCase()}.`])
+    await notifyUser(updated.user_id, {
+      title: 'Delivery update',
+      body: `Order #${updated.id} is now ${next.toLowerCase()}.`,
+      data: { orderId: updated.id, status: next },
+    })
   }
   res.json(deliveryForApp(updated))
 })
