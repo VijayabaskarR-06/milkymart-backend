@@ -11,6 +11,7 @@ import { seedDatabase } from './migrate.js'
 import { runMigrations } from './migrator.js'
 import { log, requestLogger } from './logger.js'
 import { webhookIsAuthentic, confirmTopup } from './payments.js'
+import { initMonitoring, captureError } from './monitoring.js'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -103,6 +104,12 @@ app.use('/api/admin', adminRoutes)
 // Serve the admin dashboard as a static site at /admin.
 app.use('/admin', express.static(join(here, '..', 'public', 'admin')))
 
+// Public privacy policy and terms — required for the Play Store listing and
+// linked from the app's Terms & privacy screen.
+app.use('/legal', express.static(join(here, '..', 'public', 'legal')))
+app.get('/privacy', (_req, res) => res.redirect('/legal/privacy.html'))
+app.get('/terms', (_req, res) => res.redirect('/legal/terms.html'))
+
 app.get('/', (_req, res) => {
   res.type('html').send(
     `<!doctype html><meta charset="utf-8"><title>Milky Mart API</title>
@@ -121,18 +128,20 @@ app.get('/', (_req, res) => {
 // Central error handler so a thrown route never crashes the process.
 app.use((err, req, res, _next) => {
   log.error('unhandled', { error: err.message, stack: err.stack?.split('\n')[1]?.trim(), path: req.originalUrl })
+  captureError(err, { path: req.originalUrl, method: req.method })
   res.status(500).json({ error: 'Something went wrong on the server' })
 })
 
 // Never let an unexpected rejection take the process down silently.
-process.on('unhandledRejection', (reason) => log.error('unhandledRejection', { reason: String(reason) }))
+process.on('unhandledRejection', (reason) => { log.error('unhandledRejection', { reason: String(reason) }); captureError(reason instanceof Error ? reason : new Error(String(reason))) })
 process.on('uncaughtException', (err) => log.error('uncaughtException', { error: err.message }))
 
 const port = process.env.PORT || 4000
 
 // Apply pending migrations, then seed demo data on a fresh database, so a new
 // cloud deploy comes up ready with no manual step.
-runMigrations()
+initMonitoring()
+  .then(() => runMigrations())
   .then(({ ran, total }) => log.info('migrations.done', { applied: ran, total }))
   .then(() => seedDatabase())
   .then(({ seeded }) => log.info(seeded ? 'db.seeded' : 'db.ready'))

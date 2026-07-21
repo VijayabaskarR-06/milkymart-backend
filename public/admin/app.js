@@ -212,9 +212,11 @@ async function loadCustomers() {
         <td class="mono-cell">${escapeHtml(u.mobile)}</td>
         <td><select class="partner-select" data-customer="${u.id}">${options(u.assignedRiderId)}</select></td>
         <td class="right"><span class="balance num ${u.wallet < 200 ? 'low' : ''}">${fmtRupee(u.wallet)}</span></td>
+        <td class="right"><button class="btn-link" data-orders="${u.id}">View (${u.orders})</button></td>
         <td class="right"><button class="btn-link" data-recharge="${i}">View (${u.recharges.length})</button></td>
       </tr>`).join('')
     tbody.querySelectorAll('[data-recharge]').forEach((btn) => btn.addEventListener('click', () => openRecharge(parseInt(btn.dataset.recharge, 10))))
+    tbody.querySelectorAll('[data-orders]').forEach((btn) => btn.addEventListener('click', () => openCustomerOrders(btn.dataset.orders)))
     tbody.querySelectorAll('.partner-select').forEach((sel) =>
       sel.addEventListener('change', async () => {
         try {
@@ -323,6 +325,23 @@ $('#productForm').addEventListener('submit', async (e) => {
     description: f.description.value.trim(),
   }
   try {
+    // Upload the photo first (when storage is configured and a file was chosen).
+    const file = f.photo?.files?.[0]
+    if (file) {
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader()
+        reader.onload = () => resolve(reader.result)
+        reader.onerror = () => reject(new Error('Could not read that image'))
+        reader.readAsDataURL(file)
+      })
+      try {
+        const uploaded = await api('/uploads/product-image', { method: 'POST', body: { dataUrl, name: body.id } })
+        body.image = uploaded.url
+      } catch (uploadErr) {
+        // Without storage configured the product still saves with a stock image.
+        toast(`${uploadErr.message} — saving without a photo`)
+      }
+    }
     await api('/products', { method: 'POST', body })
     closeProductModal()
     f.reset()
@@ -340,6 +359,50 @@ $('#refreshOrders')?.addEventListener('click', () => { loadOrders(); loadOvervie
 // The "Add user/rider" buttons are informational in this demo.
 document.querySelectorAll('#section-user .btn-primary, #section-rider .btn-primary').forEach((btn) =>
   btn.addEventListener('click', () => toast('Users and riders are created when they sign in to the app.')))
+
+/* ---------------- Customer order history ---------------- */
+const ordersModal = $('#ordersModal')
+
+async function openCustomerOrders(customerId) {
+  $('#ordersTitle').textContent = 'Order history'
+  $('#ordersSub').textContent = 'Loading…'
+  $('#ordersBody').innerHTML = '<p class="muted">Loading orders…</p>'
+  ordersModal.classList.add('open')
+  ordersModal.setAttribute('aria-hidden', 'false')
+  try {
+    const { customer, orders, summary } = await api(`/customers/${customerId}/orders`)
+    $('#ordersTitle').textContent = `${customer.name}'s orders`
+    $('#ordersSub').textContent =
+      `${summary.count} orders · ${fmtRupee(summary.spent)} lifetime · ${summary.delivered} delivered · ${summary.active} active · wallet ${fmtRupee(customer.wallet)}`
+    if (!orders.length) {
+      $('#ordersBody').innerHTML = '<p class="muted">This customer hasn\'t placed any orders yet.</p>'
+      return
+    }
+    $('#ordersBody').innerHTML = `
+      <table class="table table-tight">
+        <thead><tr><th>Order</th><th>Items</th><th>Partner</th><th class="right">Total</th><th>Status</th></tr></thead>
+        <tbody>
+          ${orders.map((o) => `
+            <tr>
+              <td><span class="order-id">#${escapeHtml(o.id)}</span><div class="muted" style="font-size:11px">${escapeHtml(o.date)}</div></td>
+              <td><div class="order-items">${escapeHtml((o.items || []).join(', ') || '—')}</div>
+                  <div class="muted" style="font-size:11px">${escapeHtml(o.payment || '')}</div></td>
+              <td>${escapeHtml(o.rider || '—')}</td>
+              <td class="right"><strong class="num">${fmtRupee(o.total)}</strong></td>
+              <td><span class="status-pill status-${o.status.replace(/\s+/g, '')}">${escapeHtml(o.status)}</span></td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`
+  } catch (e) {
+    $('#ordersBody').innerHTML = `<p class="muted">${escapeHtml(e.message)}</p>`
+  }
+}
+
+function closeOrdersModal() {
+  ordersModal.classList.remove('open')
+  ordersModal.setAttribute('aria-hidden', 'true')
+}
+ordersModal.querySelectorAll('[data-close-orders]').forEach((el) => el.addEventListener('click', closeOrdersModal))
 
 /* ---------------- Recharge modal ---------------- */
 const modal = $('#rechargeModal')
@@ -370,6 +433,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key !== 'Escape') return
   if (modal.classList.contains('open')) closeModal()
   if (productModal.classList.contains('open')) closeProductModal()
+  if (ordersModal.classList.contains('open')) closeOrdersModal()
 })
 
 /* ---------------- Boot ---------------- */

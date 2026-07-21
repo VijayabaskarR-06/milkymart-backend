@@ -145,7 +145,8 @@
                 <th>Mobile number</th>
                 <th>Delivery partner</th>
                 <th class="right">Wallet balance</th>
-                <th class="right">Recharge history</th>
+                <th class="right">Order history</th>
+                <th class="right">Wallet activity</th>
               </tr>
             </thead>
             <tbody id="userTable"></tbody>
@@ -235,6 +236,20 @@
     </main>
   </div>
 
+  <!-- Customer order-history modal -->
+  <div class="modal" id="ordersModal" aria-hidden="true">
+    <div class="modal-backdrop" data-close-orders></div>
+    <div class="modal-card modal-wide" role="dialog" aria-modal="true">
+      <header class="modal-head">
+        <div><h3 id="ordersTitle">Order history</h3><p class="muted" id="ordersSub">—</p></div>
+        <button class="icon-btn icon-btn-flat" data-close-orders aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+        </button>
+      </header>
+      <div class="modal-body" id="ordersBody"></div>
+    </div>
+  </div>
+
   <!-- Add product modal -->
   <div class="modal" id="productModal" aria-hidden="true">
     <div class="modal-backdrop" data-close-product></div>
@@ -254,6 +269,10 @@
           <label>Price ₹<input name="price" type="number" min="1" required placeholder="35" /></label>
           <label>MRP ₹<input name="mrp" type="number" min="1" placeholder="40" /></label>
           <label class="full">Description<input name="description" placeholder="Short description" /></label>
+          <label class="full">Product photo
+            <input name="photo" type="file" accept="image/jpeg,image/png,image/webp" />
+            <span class="field-hint" id="photoHint">Optional — JPEG/PNG/WebP up to 5 MB.</span>
+          </label>
           <p class="login-error" id="productError" hidden></p>
           <button type="submit" class="btn btn-primary full">Save product</button>
         </form>

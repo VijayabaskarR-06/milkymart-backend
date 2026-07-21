@@ -1,9 +1,12 @@
 import { Router } from 'express'
+import express from 'express'
 import bcrypt from 'bcryptjs'
+import { storageConfigured, uploadProductImage } from './storage.js'
 import { query, one } from './db.js'
 import { requireAdmin, signToken } from './auth.js'
 import { seedDatabase } from './migrate.js'
 import { validate, schemas, canTransition, allowedNext } from './validate.js'
+import { notifyUser } from './notify.js'
 import { log } from './logger.js'
 
 const router = Router()
@@ -101,10 +104,30 @@ router.patch('/orders/:id', validate(schemas.orderStatus), async (req, res) => {
   }
   const order = await one('UPDATE orders SET status=$1 WHERE id=$2 RETURNING *', [status, req.params.id])
   if (order.user_id && current.status !== status) {
-    await query('INSERT INTO notifications (user_id, title, body) VALUES ($1,$2,$3)', [order.user_id, 'Order update', `Order #${order.id} is now ${status.toLowerCase()}.`])
+    await notifyUser(order.user_id, {
+      title: 'Order update',
+      body: `Order #${order.id} is now ${status.toLowerCase()}.`,
+      data: { orderId: order.id, status },
+    })
   }
   log.info('admin.order_status', { orderId: order.id, from: current.status, to: status })
   res.json(adminOrder(order))
+})
+
+// ---- Product image upload ----------------------------------------------------
+// Accepts a base64 data URL (bigger body limit than the rest of the API) and
+// returns a CDN URL to store on the product.
+router.post('/uploads/product-image', express.json({ limit: '8mb' }), async (req, res, next) => {
+  if (!storageConfigured) {
+    return res.status(400).json({ error: 'Image storage is not configured', notConfigured: true })
+  }
+  try {
+    const result = await uploadProductImage(req.body?.dataUrl, req.body?.name || 'product')
+    if (!result.ok) return res.status(400).json({ error: result.error })
+    res.json({ url: result.url, publicId: result.publicId })
+  } catch (err) {
+    next(err)
+  }
 })
 
 // ---- Products ----------------------------------------------------------------
@@ -178,6 +201,36 @@ router.get('/customers', async (_req, res) => {
     })
   }
   res.json(out)
+})
+
+// Full order history for one customer, newest first.
+router.get('/customers/:id/orders', async (req, res) => {
+  const customer = await one(`SELECT id, name, phone, wallet_balance FROM users WHERE id=$1 AND role='customer'`, [req.params.id])
+  if (!customer) return res.status(404).json({ error: 'Customer not found' })
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 200)
+  const { rows } = await query(
+    `SELECT o.*, r.name AS rider_name FROM orders o
+     LEFT JOIN users r ON r.id = o.rider_id
+     WHERE o.user_id=$1 ORDER BY o.created_at DESC LIMIT ${limit}`,
+    [customer.id],
+  )
+  const orders = rows.map(adminOrder)
+  const spent = orders.filter((o) => o.status !== 'Cancelled').reduce((sum, o) => sum + o.total, 0)
+  res.json({
+    customer: {
+      id: customer.id,
+      name: customer.name,
+      mobile: `+91 ${String(customer.phone).slice(-10)}`,
+      wallet: num(customer.wallet_balance),
+    },
+    orders,
+    summary: {
+      count: orders.length,
+      spent,
+      delivered: orders.filter((o) => o.status === 'Delivered').length,
+      active: orders.filter((o) => !['Delivered', 'Cancelled'].includes(o.status)).length,
+    },
+  })
 })
 
 // Assign (or clear) a customer's permanent delivery partner. The rider must be

@@ -79,6 +79,16 @@
 .rider-badge.approved { color: #047857; background: #ecfdf5; border: 1px solid #a7f3d0; }
 .btn-approve { padding: 6px 14px; font-size: 12px; }
 
+/* Customer order-history modal */
+.modal-wide { max-width: min(900px, 94vw); width: 100%; }
+.table-tight th, .table-tight td { padding: 10px 12px; font-size: 13px; }
+.status-pill { display: inline-block; padding: 4px 10px; border-radius: 999px; font-size: 11px; font-weight: 700; }
+.status-pill.status-Confirmed { background: #eff6ff; color: #1d4ed8; }
+.status-pill.status-Packed { background: #f5f3ff; color: #6d28d9; }
+.status-pill.status-Outfordelivery { background: #fffbeb; color: #b45309; }
+.status-pill.status-Delivered { background: #ecfdf5; color: #047857; }
+.status-pill.status-Cancelled { background: #fef2f2; color: #b91c1c; }
+
 /* Loading + toast */
 .row-empty td { padding: 26px; text-align: center; color: #94a3b8; }
 .admin-toast {
@@ -88,3 +98,7 @@
   box-shadow: 0 16px 40px rgba(2, 6, 23, .4);
 }
 .admin-toast.show { opacity: 1; visibility: visible; transform: translate(-50%, 0); }
+
+/* Product photo picker */
+.product-form input[type="file"] { padding: 9px; border: 1.5px dashed #cbd5e1; background: #f8fafc; height: auto; cursor: pointer; }
+.field-hint { display: block; margin-top: 5px; color: #94a3b8; font-size: 11px; font-weight: 500; }
