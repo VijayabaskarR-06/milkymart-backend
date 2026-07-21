@@ -3,14 +3,16 @@ import bcrypt from 'bcryptjs'
 import { query, one } from './db.js'
 import { requireAdmin, signToken } from './auth.js'
 import { seedDatabase } from './migrate.js'
+import { validate, schemas, canTransition, allowedNext } from './validate.js'
+import { log } from './logger.js'
 
 const router = Router()
 const num = (v) => Number(v)
 
 // ---- Admin auth --------------------------------------------------------------
-router.post('/login', async (req, res) => {
-  const email = String(req.body?.email || '').trim().toLowerCase()
-  const password = String(req.body?.password || '')
+router.post('/login', validate(schemas.adminLogin), async (req, res) => {
+  const email = req.valid.email.toLowerCase()
+  const password = req.valid.password
   const admin = await one('SELECT * FROM admins WHERE email=$1', [email])
   if (!admin || !bcrypt.compareSync(password, admin.password_hash)) {
     return res.status(401).json({ error: 'Invalid email or password' })
@@ -61,32 +63,47 @@ router.get('/overview', async (_req, res) => {
 })
 
 // ---- Orders ------------------------------------------------------------------
+// Paginated so the list stays fast as order volume grows.
+// Returns { items, total, limit, offset }; older clients can still read `items`.
 router.get('/orders', async (req, res) => {
   const status = req.query.status
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200)
+  const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0)
+  const filters = []
   const params = []
-  let where = ''
   if (status && status !== 'all') {
     params.push(status)
-    where = 'WHERE o.status = $1'
+    filters.push(`o.status = $${params.length}`)
   }
+  const where = filters.length ? `WHERE ${filters.join(' AND ')}` : ''
+
+  const totalRow = await one(`SELECT COUNT(*)::int AS n FROM orders o ${where}`, params)
   const { rows } = await query(
     `SELECT o.*, r.name AS rider_name FROM orders o
      LEFT JOIN users r ON r.id = o.rider_id ${where}
-     ORDER BY o.created_at DESC`,
+     ORDER BY o.created_at DESC
+     LIMIT ${limit} OFFSET ${offset}`,
     params,
   )
-  res.json(rows.map(adminOrder))
+  res.json({ items: rows.map(adminOrder), total: totalRow.n, limit, offset })
 })
 
-router.patch('/orders/:id', async (req, res) => {
-  const allowed = ['Confirmed', 'Packed', 'Out for delivery', 'Delivered', 'Cancelled']
-  const status = req.body?.status
-  if (!allowed.includes(status)) return res.status(400).json({ error: 'Invalid status' })
+router.patch('/orders/:id', validate(schemas.orderStatus), async (req, res) => {
+  const { status } = req.valid
+  const current = await one('SELECT * FROM orders WHERE id=$1', [req.params.id])
+  if (!current) return res.status(404).json({ error: 'Order not found' })
+  // An order can't move backwards or skip the delivery lifecycle.
+  if (!canTransition(current.status, status)) {
+    return res.status(409).json({
+      error: `Can't move an order from "${current.status}" to "${status}"`,
+      allowed: allowedNext(current.status),
+    })
+  }
   const order = await one('UPDATE orders SET status=$1 WHERE id=$2 RETURNING *', [status, req.params.id])
-  if (!order) return res.status(404).json({ error: 'Order not found' })
-  if (order.user_id) {
+  if (order.user_id && current.status !== status) {
     await query('INSERT INTO notifications (user_id, title, body) VALUES ($1,$2,$3)', [order.user_id, 'Order update', `Order #${order.id} is now ${status.toLowerCase()}.`])
   }
+  log.info('admin.order_status', { orderId: order.id, from: current.status, to: status })
   res.json(adminOrder(order))
 })
 
@@ -96,9 +113,8 @@ router.get('/products', async (_req, res) => {
   res.json(rows.map(adminProduct))
 })
 
-router.post('/products', async (req, res) => {
-  const { id, name, size, price, mrp, category, badge, description, image, stock } = req.body || {}
-  if (!id || !name || price == null) return res.status(400).json({ error: 'id, name and price are required' })
+router.post('/products', validate(schemas.product), async (req, res) => {
+  const { id, name, size, price, mrp, category, badge, description, image, stock } = req.valid
   try {
     const row = await one(
       `INSERT INTO products (id, name, size, price, mrp, category, badge, description, image, stock)
@@ -166,8 +182,8 @@ router.get('/customers', async (_req, res) => {
 
 // Assign (or clear) a customer's permanent delivery partner. The rider must be
 // approved. Pass riderId: null to unassign.
-router.post('/customers/:id/assign-rider', async (req, res) => {
-  const riderId = req.body?.riderId ?? null
+router.post('/customers/:id/assign-rider', validate(schemas.assignRider), async (req, res) => {
+  const riderId = req.valid.riderId ?? null
   if (riderId !== null) {
     const rider = await one(`SELECT id, approved FROM users WHERE id=$1 AND role='rider'`, [riderId])
     if (!rider) return res.status(404).json({ error: 'Rider not found' })
@@ -200,8 +216,8 @@ router.get('/riders', async (_req, res) => {
 })
 
 // Approve (or revoke) a rider. Revoking also clears them from any customers.
-router.post('/riders/:id/approve', async (req, res) => {
-  const approved = req.body?.approved !== false
+router.post('/riders/:id/approve', validate(schemas.approveRider), async (req, res) => {
+  const approved = req.valid.approved
   const rider = await one(`UPDATE users SET approved=$1 WHERE id=$2 AND role='rider' RETURNING id`, [approved, req.params.id])
   if (!rider) return res.status(404).json({ error: 'Rider not found' })
   if (!approved) {

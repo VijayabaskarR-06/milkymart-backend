@@ -143,7 +143,17 @@ const STATUSES = ['Confirmed', 'Packed', 'Out for delivery', 'Delivered', 'Cance
 async function loadOrders() {
   const tbody = $('#orderTable')
   try {
-    const orders = await api('/orders')
+    // The endpoint is paginated: { items, total, limit, offset }.
+    const page = await api('/orders?limit=100')
+    const orders = Array.isArray(page) ? page : page.items || []
+    const totalCount = Array.isArray(page) ? page.length : page.total ?? orders.length
+    const countLabel = document.querySelector('#section-order .muted')
+    if (countLabel) {
+      countLabel.textContent =
+        totalCount > orders.length
+          ? `Showing ${orders.length} of ${totalCount} orders — change a status and the customer is notified instantly.`
+          : 'Live orders from the Milky Mart app — change a status and the customer is notified instantly.'
+    }
     if (!orders.length) {
       tbody.innerHTML = '<tr class="row-empty"><td colspan="5">No orders yet.</td></tr>'
       return
@@ -169,7 +179,11 @@ async function loadOrders() {
           sel.className = `status-select status-${sel.value.replace(/\s+/g, '')}`
           toast(`Order #${id} → ${sel.value}. Customer notified.`)
           loadOverview()
-        } catch (e) { toast(e.message) }
+        } catch (e) {
+          // e.g. an order can't go backwards — show why and restore the real value
+          toast(e.message)
+          loadOrders()
+        }
       })
     })
   } catch (e) {

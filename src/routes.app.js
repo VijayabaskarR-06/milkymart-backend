@@ -2,6 +2,10 @@ import { Router } from 'express'
 import { pool, query, one } from './db.js'
 import { requireUser, signToken } from './auth.js'
 import { checkServiceArea } from './serviceArea.js'
+import { validate, schemas } from './validate.js'
+import { issueOtp, verifyOtp as checkOtp, isLiveOtp } from './otp.js'
+import { isLivePayments, createTopupOrder, confirmTopup } from './payments.js'
+import { log } from './logger.js'
 
 const router = Router()
 const num = (v) => Number(v)
@@ -16,20 +20,30 @@ const publicUser = (u) => ({
   approved: u.role === 'rider' ? Boolean(u.approved) : true,
 })
 
-// ---- Auth (demo OTP: any 6 digits) -------------------------------------------
-router.post('/auth/request-otp', (req, res) => {
-  const phone = String(req.body?.phone || '').replace(/\D/g, '')
-  if (!/^\d{10}$/.test(phone)) return res.status(400).json({ error: 'Enter a valid 10-digit mobile number' })
-  // A real deployment would send an SMS here. Demo returns success.
-  res.json({ ok: true, message: 'Demo OTP sent' })
+// Lets the app know which integrations are live so it can adapt its UI.
+router.get('/config', (_req, res) => {
+  res.json({ liveOtp: isLiveOtp, livePayments: isLivePayments })
 })
 
-router.post('/auth/verify-otp', async (req, res) => {
-  const phone = String(req.body?.phone || '').replace(/\D/g, '')
-  const otp = String(req.body?.otp || '')
-  const role = req.body?.role === 'rider' ? 'rider' : 'customer'
-  if (!/^\d{10}$/.test(phone)) return res.status(400).json({ error: 'Invalid phone number' })
-  if (!/^\d{6}$/.test(otp)) return res.status(400).json({ error: 'Enter a 6-digit OTP' })
+// ---- Auth --------------------------------------------------------------------
+router.post('/auth/request-otp', validate(schemas.requestOtp), async (req, res, next) => {
+  try {
+    const result = await issueOtp(req.valid.phone)
+    if (result.cooldown) {
+      return res.status(429).json({ error: `Please wait ${result.cooldown}s before requesting another OTP` })
+    }
+    res.json({ ok: true, demo: Boolean(result.demo) })
+  } catch (err) {
+    log.error('otp.send_failed', { error: err.message })
+    res.status(502).json({ error: "Couldn't send the OTP right now. Please try again." })
+  }
+})
+
+router.post('/auth/verify-otp', validate(schemas.verifyOtp), async (req, res) => {
+  const { phone, otp, role } = req.valid
+
+  const check = await checkOtp(phone, otp)
+  if (!check.ok) return res.status(401).json({ error: check.error })
 
   let user = await one('SELECT * FROM users WHERE role=$1 AND phone=$2', [role, phone])
   if (!user) {
@@ -40,8 +54,14 @@ router.post('/auth/verify-otp', async (req, res) => {
       [role, phone, name, role !== 'rider'],
     )
   }
-  const token = signToken({ kind: 'user', id: user.id, role: user.role })
+  const token = signToken({ kind: 'user', id: user.id, role: user.role, tv: user.token_version ?? 0 })
   res.json({ token, user: publicUser(user) })
+})
+
+// Real logout: bumping token_version invalidates every token issued so far.
+router.post('/auth/logout', requireUser, async (req, res) => {
+  await query('UPDATE users SET token_version = token_version + 1 WHERE id=$1', [req.auth.id])
+  res.json({ ok: true })
 })
 
 router.get('/me', requireUser, async (req, res) => {
@@ -50,10 +70,8 @@ router.get('/me', requireUser, async (req, res) => {
   res.json({ user: publicUser(user) })
 })
 
-router.patch('/me', requireUser, async (req, res) => {
-  const name = String(req.body?.name || '').trim().slice(0, 40)
-  if (!name) return res.status(400).json({ error: 'Name cannot be empty' })
-  const user = await one('UPDATE users SET name=$1 WHERE id=$2 RETURNING *', [name, req.auth.id])
+router.patch('/me', requireUser, validate(schemas.updateName), async (req, res) => {
+  const user = await one('UPDATE users SET name=$1 WHERE id=$2 RETURNING *', [req.valid.name, req.auth.id])
   res.json({ user: publicUser(user) })
 })
 
@@ -122,10 +140,16 @@ router.get('/wallet', requireUser, async (req, res) => {
   })
 })
 
-router.post('/wallet/topup', requireUser, async (req, res) => {
-  const amount = Math.floor(Number(req.body?.amount))
-  if (!Number.isFinite(amount) || amount <= 0) return res.status(400).json({ error: 'Enter an amount greater than ₹0' })
-  if (amount > 50000) return res.status(400).json({ error: 'Maximum is ₹50,000 per top-up' })
+// Demo mode credits instantly. With Razorpay keys configured the app must call
+// /wallet/topup/create then /wallet/topup/confirm with the signed result.
+router.post('/wallet/topup', requireUser, validate(schemas.topup), async (req, res) => {
+  const { amount } = req.valid
+  if (isLivePayments) {
+    return res.status(409).json({
+      error: 'Online payment required',
+      requiresPayment: true,
+    })
+  }
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
@@ -142,6 +166,26 @@ router.post('/wallet/topup', requireUser, async (req, res) => {
   }
 })
 
+router.post('/wallet/topup/create', requireUser, validate(schemas.topup), async (req, res, next) => {
+  if (!isLivePayments) return res.status(400).json({ error: 'Online payments are not configured' })
+  try {
+    res.json(await createTopupOrder(req.auth.id, req.valid.amount))
+  } catch (err) {
+    next(err)
+  }
+})
+
+router.post('/wallet/topup/confirm', requireUser, async (req, res, next) => {
+  if (!isLivePayments) return res.status(400).json({ error: 'Online payments are not configured' })
+  try {
+    const result = await confirmTopup(req.auth.id, req.body || {})
+    if (!result.ok) return res.status(400).json({ error: result.error })
+    res.json({ balance: result.balance })
+  } catch (err) {
+    next(err)
+  }
+})
+
 // ---- Orders (customer) -------------------------------------------------------
 router.get('/orders', requireUser, async (req, res) => {
   const { rows } = await query('SELECT * FROM orders WHERE user_id=$1 ORDER BY created_at DESC', [req.auth.id])
@@ -154,9 +198,18 @@ router.get('/orders/:id', requireUser, async (req, res) => {
   res.json(orderForApp(row))
 })
 
-router.post('/orders', requireUser, async (req, res) => {
-  const { items, address, slot, date } = req.body || {}
-  if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'Your cart is empty' })
+router.post('/orders', requireUser, validate(schemas.placeOrder), async (req, res, next) => {
+  const { items, address, slot, date, idempotencyKey } = req.valid
+  const key = idempotencyKey || req.headers['idempotency-key'] || null
+
+  // A retry or double-tap with the same key returns the original order.
+  if (key) {
+    const existing = await one('SELECT * FROM orders WHERE user_id=$1 AND idempotency_key=$2', [req.auth.id, key])
+    if (existing) {
+      log.info('order.idempotent_replay', { orderId: existing.id })
+      return res.status(200).json(orderForApp(existing))
+    }
+  }
 
   const client = await pool.connect()
   try {
@@ -189,9 +242,9 @@ router.post('/orders', requireUser, async (req, res) => {
 
     const id = await nextOrderId(client)
     const inserted = await client.query(
-      `INSERT INTO orders (id, user_id, customer_name, phone, status, total, item_count, items, address, slot, payment, date, rider_id)
-       VALUES ($1,$2,$3,$4,'Confirmed',$5,$6,$7,$8,$9,$10,$11,$12) RETURNING *`,
-      [id, user.id, user.name, user.phone, total, itemCount, JSON.stringify(labels), address, slot, payment, date, riderId],
+      `INSERT INTO orders (id, user_id, customer_name, phone, status, total, item_count, items, address, slot, payment, date, rider_id, idempotency_key)
+       VALUES ($1,$2,$3,$4,'Confirmed',$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *`,
+      [id, user.id, user.name, user.phone, total, itemCount, JSON.stringify(labels), address, slot, payment, date, riderId, key],
     )
 
     if (payment === 'Wallet') {
@@ -201,11 +254,17 @@ router.post('/orders', requireUser, async (req, res) => {
     await client.query('INSERT INTO notifications (user_id, title, body) VALUES ($1,$2,$3)', [user.id, 'Order confirmed', `Order #${id} placed — paying by ${payment === 'Wallet' ? 'wallet' : 'cash on delivery'}.`])
 
     await client.query('COMMIT')
+    log.info('order.created', { orderId: id, total, payment })
     res.status(201).json(orderForApp(inserted.rows[0]))
   } catch (err) {
     await client.query('ROLLBACK')
+    // Two concurrent submissions with the same key: return the winner.
+    if (err.code === '23505' && key) {
+      const existing = await one('SELECT * FROM orders WHERE user_id=$1 AND idempotency_key=$2', [req.auth.id, key])
+      if (existing) return res.status(200).json(orderForApp(existing))
+    }
     if (err.status) return res.status(err.status).json({ error: err.message })
-    throw err
+    return next(err)
   } finally {
     client.release()
   }

@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  api-tests:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: milkymart_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports: ['5432:5432']
+
+    env:
+      DATABASE_URL: postgres://postgres:postgres@localhost:5432/milkymart_test
+      PGSSL: disable
+      JWT_SECRET: ci-test-secret
+      NODE_ENV: test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+      - run: npm ci
+      - name: Run migrations and seed
+        run: npm run migrate
+      - name: Start API
+        run: |
+          npm start &
+          for i in {1..30}; do
+            curl -sf http://localhost:4000/health && break
+            sleep 1
+          done
+      - name: API test suite
+        run: npm test
