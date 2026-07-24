@@ -211,10 +211,11 @@ async function loadCustomers() {
         <td><div class="cust"><div class="avatar" style="background:#1e293b">${escapeHtml(u.initials)}</div><div class="cust-name">${escapeHtml(u.name)}</div></div></td>
         <td class="mono-cell">${escapeHtml(u.mobile)}</td>
         <td><select class="partner-select" data-customer="${u.id}">${options(u.assignedRiderId)}</select></td>
-        <td class="right"><span class="balance num ${u.wallet < 200 ? 'low' : ''}">${fmtRupee(u.wallet)}</span></td>
+        <td class="right"><span class="balance num ${u.wallet < 200 ? 'low' : ''}">${fmtRupee(u.wallet)}</span> <button class="btn-link" data-addmoney="${u.id}" data-name="${escapeHtml(u.name)}">+ Add</button></td>
         <td class="right"><button class="btn-link" data-orders="${u.id}">View (${u.orders})</button></td>
         <td class="right"><button class="btn-link" data-recharge="${i}">View (${u.recharges.length})</button></td>
       </tr>`).join('')
+    tbody.querySelectorAll('[data-addmoney]').forEach((btn) => btn.addEventListener('click', () => addCustomerMoney(btn.dataset.addmoney, btn.dataset.name)))
     tbody.querySelectorAll('[data-recharge]').forEach((btn) => btn.addEventListener('click', () => openRecharge(parseInt(btn.dataset.recharge, 10))))
     tbody.querySelectorAll('[data-orders]').forEach((btn) => btn.addEventListener('click', () => openCustomerOrders(btn.dataset.orders)))
     tbody.querySelectorAll('.partner-select').forEach((sel) =>
@@ -403,6 +404,21 @@ function closeOrdersModal() {
   ordersModal.setAttribute('aria-hidden', 'true')
 }
 ordersModal.querySelectorAll('[data-close-orders]').forEach((el) => el.addEventListener('click', closeOrdersModal))
+
+/* ---------------- Add money to a customer's wallet ---------------- */
+async function addCustomerMoney(customerId, name) {
+  const input = window.prompt(`Add money to ${name}'s wallet\n\nEnter the cash amount collected by the delivery partner (₹):`, '')
+  if (input === null) return
+  const amount = Math.round(Number(input))
+  if (!Number.isFinite(amount) || amount <= 0) { toast('Enter a valid amount'); return }
+  try {
+    const res = await api(`/customers/${customerId}/wallet`, { method: 'POST', body: { amount } })
+    toast(`₹${amount} added · new balance ₹${Number(res.wallet).toLocaleString('en-IN')}`)
+    loadCustomers()
+  } catch (e) {
+    toast(e.message)
+  }
+}
 
 /* ---------------- Recharge modal ---------------- */
 const modal = $('#rechargeModal')

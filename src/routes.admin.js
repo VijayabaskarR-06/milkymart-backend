@@ -2,7 +2,7 @@ import { Router } from 'express'
 import express from 'express'
 import bcrypt from 'bcryptjs'
 import { storageConfigured, uploadProductImage } from './storage.js'
-import { query, one } from './db.js'
+import { pool, query, one } from './db.js'
 import { requireAdmin, signToken } from './auth.js'
 import { seedDatabase } from './migrate.js'
 import { validate, schemas, canTransition, allowedNext } from './validate.js'
@@ -231,6 +231,44 @@ router.get('/customers/:id/orders', async (req, res) => {
       active: orders.filter((o) => !['Delivered', 'Cancelled'].includes(o.status)).length,
     },
   })
+})
+
+// Credit (or debit) a customer's wallet. Customers cannot top up themselves —
+// they hand cash to the delivery partner and an admin loads it here. A positive
+// amount adds money; a negative amount corrects a mistake. Recorded as a
+// transaction so it shows in the customer's wallet history.
+router.post('/customers/:id/wallet', async (req, res) => {
+  const amount = Math.round(Number(req.body?.amount))
+  if (!Number.isFinite(amount) || amount === 0) return res.status(400).json({ error: 'Enter a non-zero amount' })
+  if (Math.abs(amount) > 100000) return res.status(400).json({ error: 'Amount is too large' })
+  const note = String(req.body?.note || '').slice(0, 80).trim()
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    const { rows } = await client.query(
+      `UPDATE users SET wallet_balance = wallet_balance + $1 WHERE id=$2 AND role='customer' RETURNING id, name, wallet_balance`,
+      [amount, req.params.id],
+    )
+    if (!rows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Customer not found' }) }
+    if (num(rows[0].wallet_balance) < 0) { await client.query('ROLLBACK'); return res.status(400).json({ error: 'That would make the balance negative' }) }
+    const label = note || (amount > 0 ? 'Cash added by delivery partner' : 'Wallet adjustment')
+    await client.query(
+      'INSERT INTO transactions (user_id, label, amount, type) VALUES ($1,$2,$3,$4)',
+      [req.params.id, label, Math.abs(amount), amount > 0 ? 'credit' : 'debit'],
+    )
+    await client.query('COMMIT')
+    notifyUser(req.params.id, {
+      title: amount > 0 ? 'Wallet updated' : 'Wallet adjusted',
+      body: amount > 0 ? `₹${amount} was added to your wallet.` : `₹${Math.abs(amount)} was deducted from your wallet.`,
+    }).catch(() => {})
+    log.info('admin.wallet_credit', { customer: req.params.id, amount })
+    res.json({ ok: true, wallet: num(rows[0].wallet_balance) })
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw err
+  } finally {
+    client.release()
+  }
 })
 
 // Assign (or clear) a customer's permanent delivery partner. The rider must be
