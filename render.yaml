@@ -11,10 +11,11 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
+      # External Postgres connection string (e.g. Neon — free and non-expiring).
+      # Set this in the Render dashboard. The app auto-creates all tables and
+      # seeds demo data on first boot, so a brand-new empty database just works.
       - key: DATABASE_URL
-        fromDatabase:
-          name: milkymart-db
-          property: connectionString
+        sync: false
       - key: JWT_SECRET
         generateValue: true          # strong random secret, unique per deploy
       - key: ADMIN_EMAIL
@@ -58,6 +59,5 @@ services:
       - key: FIREBASE_SERVICE_ACCOUNT
         sync: false
 
-databases:
-  - name: milkymart-db
-    plan: free
+# Database is now an external, non-expiring Postgres (Neon/Supabase), set via the
+# DATABASE_URL env var above — Render's free Postgres expires after ~30 days.
