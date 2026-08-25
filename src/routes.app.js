@@ -4,7 +4,7 @@ import { requireUser, signToken } from './auth.js'
 import { checkServiceArea } from './serviceArea.js'
 import { validate, schemas } from './validate.js'
 import { issueOtp, verifyOtp as checkOtp, isLiveOtp } from './otp.js'
-import { isLivePayments, createTopupOrder, confirmTopup } from './payments.js'
+import { isLivePayments, demoTopupBlocked, createTopupOrder, confirmTopup } from './payments.js'
 import { firebaseConfigured, verifyFirebaseIdToken } from './firebase.js'
 import { notifyUser } from './notify.js'
 import { log } from './logger.js'
@@ -71,6 +71,9 @@ router.post('/auth/request-otp', validate(schemas.requestOtp), async (req, res, 
     }
     res.json({ ok: true, demo: Boolean(result.demo) })
   } catch (err) {
+    if (err.disabled) {
+      return res.status(503).json({ error: 'OTP sign-in is unavailable. Please update the app.' })
+    }
     log.error('otp.send_failed', { error: err.message })
     res.status(502).json({ error: "Couldn't send the OTP right now. Please try again." })
   }
@@ -197,6 +200,10 @@ router.post('/wallet/topup', requireUser, validate(schemas.topup), async (req, r
       error: 'Online payment required',
       requiresPayment: true,
     })
+  }
+  // Fail closed: never mint wallet balance for free on a public deployment.
+  if (demoTopupBlocked) {
+    return res.status(503).json({ error: 'Wallet top-up is unavailable right now.' })
   }
   const client = await pool.connect()
   try {

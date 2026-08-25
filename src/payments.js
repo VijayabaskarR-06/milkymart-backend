@@ -10,6 +10,13 @@ const KEY_SECRET = process.env.RAZORPAY_KEY_SECRET
 export const isLivePayments = Boolean(KEY_ID && KEY_SECRET)
 export const publicKeyId = KEY_ID || null
 
+// Without Razorpay keys, /wallet/topup credits the wallet with no money taken.
+// On a public deployment that is free balance for anyone who can sign in, so the
+// instant-credit path is refused in production unless the operator opts in.
+export const allowDemoPayments = process.env.ALLOW_DEMO_PAYMENTS === 'true'
+export const demoTopupBlocked =
+  !isLivePayments && process.env.NODE_ENV === 'production' && !allowDemoPayments
+
 const authHeader = () => 'Basic ' + Buffer.from(`${KEY_ID}:${KEY_SECRET}`).toString('base64')
 
 /** Creates a Razorpay order for a wallet top-up and records it as pending. */

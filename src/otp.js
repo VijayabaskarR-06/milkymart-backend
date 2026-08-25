@@ -15,6 +15,23 @@ export const isLiveOtp = Boolean(
   (smsProvider === 'twilio' && process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM),
 )
 
+// Demo mode accepts ANY 6-digit code, so on a public deployment it is an account
+// takeover for every user: anyone can POST /auth/verify-otp with someone else's
+// number and be handed that person's session. It must never be reachable in
+// production by accident — the operator has to opt in out loud.
+// The native app signs in through Firebase (/auth/firebase), which is verified
+// server-side, so refusing the demo path here does not affect real app users.
+export const allowDemoOtp = process.env.ALLOW_DEMO_OTP === 'true'
+export const demoOtpBlocked = !isLiveOtp && process.env.NODE_ENV === 'production' && !allowDemoOtp
+
+if (demoOtpBlocked) {
+  log.warn('otp.demo_disabled', {
+    detail: 'No SMS provider configured in production — /auth/request-otp and ' +
+      '/auth/verify-otp are disabled. Set SMS_PROVIDER + credentials for real codes, ' +
+      'or ALLOW_DEMO_OTP=true to deliberately re-open the insecure demo path.',
+  })
+}
+
 const hash = (phone, code) => createHash('sha256').update(`${phone}:${code}`).digest('hex')
 
 async function sendSms(phone, code) {
@@ -52,6 +69,12 @@ async function sendSms(phone, code) {
 
 /** Creates and delivers a code. Returns { demo, cooldown } — never the code itself. */
 export async function issueOtp(phone) {
+  // Matches verifyOtp: don't pretend to send a code we would then never check.
+  if (demoOtpBlocked) {
+    const err = new Error('OTP sign-in is not configured')
+    err.disabled = true
+    throw err
+  }
   const recent = await one(
     `SELECT created_at FROM otp_codes WHERE phone=$1 AND created_at > now() - ($2 || ' seconds')::interval
      ORDER BY created_at DESC LIMIT 1`,
@@ -81,6 +104,8 @@ export async function issueOtp(phone) {
 
 /** Verifies a code. Returns { ok } or { ok:false, error }. */
 export async function verifyOtp(phone, code) {
+  // Fail closed: never hand out a session on an unverified code in production.
+  if (demoOtpBlocked) return { ok: false, error: 'OTP sign-in is unavailable. Please update the app.' }
   if (!isLiveOtp) return { ok: true } // demo mode — any 6 digits (already format-checked)
 
   const row = await one('SELECT * FROM otp_codes WHERE phone=$1 ORDER BY created_at DESC LIMIT 1', [phone])

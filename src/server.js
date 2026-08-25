@@ -36,13 +36,22 @@ app.use(
   }),
 )
 
-// CORS: the native mobile app sends no Origin (allowed); browser callers must be
-// in CORS_ORIGINS (comma-separated) when that is set, else all origins are allowed.
+// CORS: the native mobile app and server-to-server callers send no Origin, so
+// those are always allowed. Browser origins must appear in CORS_ORIGINS.
+// In production an unset CORS_ORIGINS means "no third-party site may script this
+// API" rather than "every site may" — same-origin callers like /admin/ send an
+// Origin matching PUBLIC_URL, so they are allowed explicitly below.
 const allowOrigins = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean)
+const selfOrigin = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '')
+if (selfOrigin && !allowOrigins.includes(selfOrigin)) allowOrigins.push(selfOrigin)
+const lockCors = process.env.NODE_ENV === 'production'
+
 app.use(
   cors({
     origin(origin, cb) {
-      if (!origin || allowOrigins.length === 0 || allowOrigins.includes(origin)) return cb(null, true)
+      if (!origin) return cb(null, true) // native app / curl / server-to-server
+      if (allowOrigins.includes(origin)) return cb(null, true)
+      if (!lockCors && allowOrigins.length === 0) return cb(null, true) // dev convenience
       cb(new Error('Not allowed by CORS'))
     },
   }),

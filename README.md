@@ -13,7 +13,12 @@ The app and the admin panel share one database, so an order placed in the app
 appears in the admin instantly, and a status change in the admin flows back to
 the customer.
 
-## Demo credentials
+## Local development credentials
+
+These apply to a **local** run only (`NODE_ENV` unset). In production the demo OTP
+path is disabled, and the seeded admin password comes from `ADMIN_PASSWORD` — or is
+randomly generated and printed once to the boot log when that variable is unset.
+Never reuse these values on a public deployment.
 
 - **Admin:** `admin@milkymart.app` / `milkymart123`
 - **Customer:** phone `9876543210`, any 6-digit OTP
