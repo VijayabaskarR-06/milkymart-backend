@@ -60,6 +60,19 @@ export const schemas = {
     email: z.string().trim().email('Enter a valid email'),
     password: z.string().min(1, 'Enter your password'),
   }),
+  adminChangePassword: z
+    .object({
+      currentPassword: z.string().min(1, 'Enter your current password'),
+      newPassword: z
+        .string()
+        .min(10, 'New password must be at least 10 characters')
+        .max(200)
+        .refine((v) => /[a-zA-Z]/.test(v) && /[0-9]/.test(v), 'Use a mix of letters and numbers'),
+    })
+    .refine((v) => v.currentPassword !== v.newPassword, {
+      message: 'New password must be different from the current one',
+      path: ['newPassword'],
+    }),
   orderStatus: z.object({
     status: z.enum(['Confirmed', 'Packed', 'Out for delivery', 'Delivered', 'Cancelled']),
   }),

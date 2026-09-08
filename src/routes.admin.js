@@ -20,11 +20,35 @@ router.post('/login', validate(schemas.adminLogin), async (req, res) => {
   if (!admin || !bcrypt.compareSync(password, admin.password_hash)) {
     return res.status(401).json({ error: 'Invalid email or password' })
   }
-  const token = signToken({ kind: 'admin', id: admin.id, email: admin.email })
+  const token = signToken({ kind: 'admin', id: admin.id, email: admin.email, tv: admin.token_version ?? 0 })
   res.json({ token, admin: { email: admin.email, name: admin.name } })
 })
 
 router.use(requireAdmin)
+
+// Lets the signed-in admin change their own password. Requires the current
+// password (so a hijacked-but-still-logged-in tab can't silently lock the
+// real owner out) and bumps token_version, which signs every other admin
+// session out — the browser making this call gets a fresh token back so it
+// keeps working.
+router.post('/change-password', validate(schemas.adminChangePassword), async (req, res) => {
+  const { currentPassword, newPassword } = req.valid
+  const admin = await one('SELECT * FROM admins WHERE id=$1', [req.admin.id])
+  // 400, not 401 — the admin panel treats any 401 as "session expired, log
+  // out", which would wrongly boot someone out just for mistyping it.
+  if (!admin || !bcrypt.compareSync(currentPassword, admin.password_hash)) {
+    return res.status(400).json({ error: 'Current password is incorrect' })
+  }
+  const hash = bcrypt.hashSync(newPassword, 10)
+  const { rows } = await query(
+    `UPDATE admins SET password_hash=$1, token_version=token_version+1, password_changed_at=now()
+     WHERE id=$2 RETURNING token_version`,
+    [hash, admin.id],
+  )
+  const token = signToken({ kind: 'admin', id: admin.id, email: admin.email, tv: rows[0].token_version })
+  log.info('admin.password_changed', { admin: admin.id })
+  res.json({ ok: true, token })
+})
 
 // Restore the demo dataset (admin-only). Handy for showing a clean slate.
 router.post('/reset', async (_req, res) => {

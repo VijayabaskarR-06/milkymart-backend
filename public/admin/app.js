@@ -78,6 +78,49 @@ $('#loginForm').addEventListener('submit', async (e) => {
 
 $('#logoutBtn')?.addEventListener('click', logout)
 
+/* ---------------- Change password ---------------- */
+const passwordModal = $('#passwordModal')
+const passwordForm = $('#passwordForm')
+function openPasswordModal() {
+  passwordForm.reset()
+  $('#passwordError').hidden = true
+  passwordModal.classList.add('open')
+  passwordModal.setAttribute('aria-hidden', 'false')
+}
+function closePasswordModal() {
+  passwordModal.classList.remove('open')
+  passwordModal.setAttribute('aria-hidden', 'true')
+}
+$('#changePasswordBtn')?.addEventListener('click', openPasswordModal)
+passwordModal.querySelectorAll('[data-close-password]').forEach((el) => el.addEventListener('click', closePasswordModal))
+
+passwordForm.addEventListener('submit', async (e) => {
+  e.preventDefault()
+  const err = $('#passwordError')
+  err.hidden = true
+  const f = e.target
+  const currentPassword = f.currentPassword.value
+  const newPassword = f.newPassword.value
+  const confirmPassword = f.confirmPassword.value
+  if (newPassword !== confirmPassword) {
+    err.textContent = 'New password and confirmation do not match'
+    err.hidden = false
+    return
+  }
+  try {
+    const { token: t } = await api('/change-password', { method: 'POST', body: { currentPassword, newPassword } })
+    // The server just invalidated every other admin session — including the
+    // token this tab was using — so swap in the fresh one it hands back.
+    token = t
+    localStorage.setItem(TOKEN_KEY, t)
+    closePasswordModal()
+    toast('Password updated — you have been signed out everywhere else')
+  } catch (e2) {
+    err.textContent = e2.message
+    err.hidden = false
+  }
+})
+
 /* ---------------- Navigation ---------------- */
 const navItems = document.querySelectorAll('.nav-item[data-section]')
 const sections = document.querySelectorAll('.section')
@@ -454,6 +497,7 @@ document.addEventListener('keydown', (e) => {
   if (modal.classList.contains('open')) closeModal()
   if (productModal.classList.contains('open')) closeProductModal()
   if (ordersModal.classList.contains('open')) closeOrdersModal()
+  if (passwordModal.classList.contains('open')) closePasswordModal()
 })
 
 /* ---------------- Boot ---------------- */
