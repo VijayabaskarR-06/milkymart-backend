@@ -102,3 +102,45 @@
 /* Product photo picker */
 .product-form input[type="file"] { padding: 9px; border: 1.5px dashed #cbd5e1; background: #f8fafc; height: auto; cursor: pointer; }
 .field-hint { display: block; margin-top: 5px; color: #94a3b8; font-size: 11px; font-weight: 500; }
+
+/* --- Product editing --------------------------------------------------- */
+/* Cards are buttons now, so the button defaults have to be neutralised. */
+.product-editable {
+  padding: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  width: 100%;
+}
+.product-editable:hover { border-color: #94a3b8; }
+.product-editable:focus-visible { outline: 2px solid #1e293b; outline-offset: 2px; }
+/* A deactivated product is dimmed rather than removed, so it can be restored. */
+.product-hidden { opacity: 0.55; }
+.product-thumb img { width: 100%; height: 100%; object-fit: cover; position: relative; z-index: 1; }
+.product-edit-hint {
+  margin-top: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #64748b;
+}
+.product-editable:hover .product-edit-hint { color: #1e293b; }
+
+.toggle-inline {
+  display: inline-flex; align-items: center; gap: 7px;
+  font-size: 12px; font-weight: 600; color: #475569;
+  cursor: pointer; user-select: none;
+}
+.toggle-inline input { width: 15px; height: 15px; cursor: pointer; accent-color: #1e293b; }
+
+/* The visibility switch reads as a row, not as a labelled input like the rest. */
+.product-form .toggle-row { flex-direction: row; align-items: flex-start; gap: 10px; }
+.product-form .toggle-row input { width: 16px; height: 16px; margin-top: 2px; flex: none; accent-color: #1e293b; cursor: pointer; }
+.product-form .toggle-row .field-hint { margin-top: 3px; }
+
+.current-photo { display: flex; align-items: center; gap: 12px; }
+.current-photo img {
+  width: 56px; height: 56px; flex: none;
+  object-fit: cover; border-radius: 8px; border: 1px solid #e2e8f0; background: #f8fafc;
+}
+.field-hint.inline { display: inline; margin: 0 0 0 4px; font-weight: 500; }

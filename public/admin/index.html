@@ -202,7 +202,11 @@
             <p class="muted"><span id="productCount">0</span> dairy products available for delivery.</p>
           </div>
           <div class="head-actions">
-            <button class="btn btn-primary">
+            <label class="toggle-inline">
+              <input type="checkbox" id="showHidden" />
+              Show hidden
+            </label>
+            <button class="btn btn-primary" id="addProductBtn">
               <svg viewBox="0 0 24 24" fill="none"><path d="M12 5V19M5 12H19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
               Add product
             </button>
@@ -293,7 +297,7 @@
     <div class="modal-backdrop" data-close-product></div>
     <div class="modal-card" role="dialog" aria-modal="true">
       <header class="modal-head">
-        <div><h3>Add product</h3><p class="muted">New products appear in the app instantly.</p></div>
+        <div><h3 id="productModalTitle">Add product</h3><p class="muted" id="productModalHint">New products appear in the app instantly.</p></div>
         <button class="icon-btn icon-btn-flat" data-close-product aria-label="Close">
           <svg viewBox="0 0 24 24" fill="none"><path d="M6 6L18 18M6 18L18 6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
         </button>
@@ -305,14 +309,24 @@
           <label>Size<input name="size" value="500 ml" /></label>
           <label>Category<input name="category" value="Milk" /></label>
           <label>Price ₹<input name="price" type="number" min="1" required placeholder="35" /></label>
-          <label>MRP ₹<input name="mrp" type="number" min="1" placeholder="40" /></label>
+          <label>MRP ₹ <span class="field-hint inline">set above price to show an offer</span><input name="mrp" type="number" min="1" placeholder="40" /></label>
+          <label>Badge<input name="badge" placeholder="Bestseller" /></label>
+          <label>Stock<input name="stock" type="number" min="0" placeholder="100" /></label>
           <label class="full">Description<input name="description" placeholder="Short description" /></label>
           <label class="full">Product photo
             <input name="photo" type="file" accept="image/jpeg,image/png,image/webp" />
             <span class="field-hint" id="photoHint">Optional — JPEG/PNG/WebP up to 5 MB.</span>
           </label>
+          <div class="full current-photo" id="currentPhoto" hidden>
+            <img id="currentPhotoImg" alt="" />
+            <span class="field-hint">Current photo — choosing a file above replaces it.</span>
+          </div>
+          <label class="full toggle-row" id="activeRow" hidden>
+            <input name="active" type="checkbox" checked />
+            <span>Visible in the app<span class="field-hint">Uncheck to hide this product from customers without deleting it.</span></span>
+          </label>
           <p class="login-error" id="productError" hidden></p>
-          <button type="submit" class="btn btn-primary full">Save product</button>
+          <button type="submit" class="btn btn-primary full" id="productSubmit">Save product</button>
         </form>
       </div>
     </div>
