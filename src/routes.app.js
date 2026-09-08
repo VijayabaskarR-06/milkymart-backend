@@ -63,7 +63,15 @@ router.post('/auth/firebase', async (req, res) => {
 })
 
 // ---- Auth --------------------------------------------------------------------
+// Without a real SMS provider, /auth/verify-otp accepts any 6-digit code for
+// any phone number — fine for local dev, but a public account-takeover hole
+// in production. Firebase phone auth (real, SMS-verified) already covers the
+// app in production, so once it's configured this fallback is disabled there
+// instead of requiring a second SMS provider just to close the gap.
+const otpFallbackBlocked = () => process.env.NODE_ENV === 'production' && !isLiveOtp && firebaseConfigured
+
 router.post('/auth/request-otp', validate(schemas.requestOtp), async (req, res, next) => {
+  if (otpFallbackBlocked()) return res.status(403).json({ error: 'Phone sign-in works from the Milky Mart app only.' })
   try {
     const result = await issueOtp(req.valid.phone)
     if (result.cooldown) {
@@ -77,6 +85,7 @@ router.post('/auth/request-otp', validate(schemas.requestOtp), async (req, res, 
 })
 
 router.post('/auth/verify-otp', validate(schemas.verifyOtp), async (req, res) => {
+  if (otpFallbackBlocked()) return res.status(403).json({ error: 'Phone sign-in works from the Milky Mart app only.' })
   const { phone, otp, role } = req.valid
   const check = await checkOtp(phone, otp)
   if (!check.ok) return res.status(401).json({ error: check.error })
