@@ -319,19 +319,40 @@ async function loadRiders() {
   }
 }
 
+// Products the owner can act on, keyed by id so the edit form can be filled
+// from the last load without another round trip.
+const productsById = new Map()
+
 async function loadProducts() {
   const grid = $('#productGrid')
   try {
     const products = await api('/products')
-    const active = products.filter((p) => p.active)
-    $('#productCount').textContent = active.length
-    grid.innerHTML = active.map((p) => {
+    productsById.clear()
+    products.forEach((p) => productsById.set(p.id, p))
+
+    // Hidden (deactivated) products stay listed behind a toggle — otherwise
+    // deactivating one would make it unreachable and impossible to restore.
+    const showHidden = $('#showHidden')?.checked
+    const visible = showHidden ? products : products.filter((p) => p.active)
+    $('#productCount').textContent = products.filter((p) => p.active).length
+
+    if (!visible.length) {
+      grid.innerHTML = `<p class="muted">No products yet. Use “Add product” to create the first one.</p>`
+      return
+    }
+
+    grid.innerHTML = visible.map((p) => {
       const mono = (p.name.match(/\b\w/g) || []).slice(0, 2).join('').toUpperCase()
+      // A product image may be a CDN URL or one of the paths bundled with the
+      // app; the latter cannot resolve here, so fall back to the initials.
+      const thumb = p.image && /^https?:\/\//.test(p.image)
+        ? `<img src="${escapeHtml(p.image)}" alt="" onerror="this.remove()" />`
+        : escapeHtml(mono)
       return `
-      <div class="product">
+      <button class="product product-editable${p.active ? '' : ' product-hidden'}" data-edit-product="${escapeHtml(p.id)}" type="button">
         <div class="product-thumb" style="background:#f8fafc; color:#0f172a">
           ${p.offer > 0 ? `<span class="offer-badge">${p.offer}% OFF</span>` : ''}
-          ${escapeHtml(mono)}
+          ${thumb}
         </div>
         <div class="product-body">
           <div class="product-name">${escapeHtml(p.name)}</div>
@@ -341,64 +362,160 @@ async function loadProducts() {
               <span class="product-price">₹${p.price}</span>
               ${p.offer > 0 ? `<span class="product-price-old">₹${p.mrp}</span>` : ''}
             </div>
-            ${p.offer > 0 ? `<span class="pill pill-green">${p.offer}% off</span>` : `<span class="pill pill-slate">No offer</span>`}
+            ${p.active
+              ? (p.offer > 0 ? `<span class="pill pill-green">${p.offer}% off</span>` : `<span class="pill pill-slate">No offer</span>`)
+              : `<span class="pill pill-slate">Hidden</span>`}
           </div>
+          <span class="product-edit-hint">Edit</span>
         </div>
-      </div>`
+      </button>`
     }).join('')
   } catch (e) {
     grid.innerHTML = `<p class="muted">${escapeHtml(e.message)}</p>`
   }
 }
 
-/* ---------------- Add product ---------------- */
+$('#showHidden')?.addEventListener('change', loadProducts)
+
+// Clicking a card edits it. Delegated so it survives every re-render.
+$('#productGrid')?.addEventListener('click', (e) => {
+  const card = e.target.closest('[data-edit-product]')
+  if (card) openProductModal(productsById.get(card.dataset.editProduct))
+})
+
+/* ---------------- Add / edit product ---------------- */
 const productModal = $('#productModal')
-function openProductModal() { productModal.classList.add('open'); productModal.setAttribute('aria-hidden', 'false') }
-function closeProductModal() { productModal.classList.remove('open'); productModal.setAttribute('aria-hidden', 'true') }
-document.querySelector('#section-product .btn-primary')?.addEventListener('click', openProductModal)
+// null = creating, otherwise the id of the product being edited.
+let editingProductId = null
+
+function openProductModal(product = null) {
+  const f = $('#productForm')
+  const err = $('#productError')
+  err.hidden = true
+  f.reset()
+  editingProductId = product?.id ?? null
+
+  $('#productModalTitle').textContent = product ? 'Edit product' : 'Add product'
+  $('#productModalHint').textContent = product
+    ? 'Changes reach the app the next time it syncs.'
+    : 'New products appear in the app instantly.'
+  $('#productSubmit').textContent = product ? 'Save changes' : 'Save product'
+  // The id is the primary key and is referenced by past orders, so it is fixed
+  // once the product exists.
+  f.id.readOnly = Boolean(product)
+  $('#activeRow').hidden = !product
+
+  const photo = $('#currentPhoto')
+  const photoImg = $('#currentPhotoImg')
+  const hasRemoteImage = product?.image && /^https?:\/\//.test(product.image)
+  photo.hidden = !hasRemoteImage
+  photoImg.src = hasRemoteImage ? product.image : ''
+
+  if (product) {
+    f.name.value = product.name ?? ''
+    f.id.value = product.id
+    f.size.value = product.size ?? ''
+    f.category.value = product.category ?? ''
+    f.price.value = product.price ?? ''
+    f.mrp.value = product.mrp ?? ''
+    f.badge.value = product.badge ?? ''
+    f.stock.value = product.stock ?? ''
+    f.description.value = product.description ?? ''
+    f.active.checked = product.active !== false
+  }
+
+  productModal.classList.add('open')
+  productModal.setAttribute('aria-hidden', 'false')
+}
+
+function closeProductModal() {
+  productModal.classList.remove('open')
+  productModal.setAttribute('aria-hidden', 'true')
+  editingProductId = null
+}
+
+$('#addProductBtn')?.addEventListener('click', () => openProductModal())
 productModal.querySelectorAll('[data-close-product]').forEach((el) => el.addEventListener('click', closeProductModal))
+
+// Reads the chosen file and pushes it to storage.
+// Returns {} when no file was picked, {url} on success, or {error} when the
+// upload failed — the caller saves the other fields either way, but a failure
+// has to be reported rather than swallowed: the owner asked for a new photo and
+// would otherwise be told the product saved and assume the picture changed too.
+async function uploadChosenPhoto(fileInput, idForName) {
+  const file = fileInput?.files?.[0]
+  if (!file) return {}
+  let dataUrl
+  try {
+    dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(reader.result)
+      reader.onerror = () => reject(new Error('Could not read that image'))
+      reader.readAsDataURL(file)
+    })
+  } catch (readErr) {
+    return { error: readErr.message }
+  }
+  try {
+    const uploaded = await api('/uploads/product-image', { method: 'POST', body: { dataUrl, name: idForName } })
+    return { url: uploaded.url }
+  } catch (uploadErr) {
+    return { error: uploadErr.message }
+  }
+}
 
 $('#productForm').addEventListener('submit', async (e) => {
   e.preventDefault()
   const err = $('#productError')
   err.hidden = true
   const f = e.target
+  const submit = $('#productSubmit')
+  const wasEditing = editingProductId
+  const id = wasEditing || f.id.value.trim().toLowerCase().replace(/\s+/g, '-')
+
   const body = {
-    id: f.id.value.trim().toLowerCase().replace(/\s+/g, '-'),
     name: f.name.value.trim(),
     size: f.size.value.trim(),
     category: f.category.value.trim(),
     price: Number(f.price.value),
-    mrp: f.mrp.value ? Number(f.mrp.value) : undefined,
+    // Blank MRP means "no offer": send the price so the app shows no fake discount.
+    mrp: f.mrp.value ? Number(f.mrp.value) : Number(f.price.value),
+    badge: f.badge.value.trim() || null,
     description: f.description.value.trim(),
   }
+  if (f.stock.value !== '') body.stock = Number(f.stock.value)
+
+  submit.disabled = true
   try {
-    // Upload the photo first (when storage is configured and a file was chosen).
-    const file = f.photo?.files?.[0]
-    if (file) {
-      const dataUrl = await new Promise((resolve, reject) => {
-        const reader = new FileReader()
-        reader.onload = () => resolve(reader.result)
-        reader.onerror = () => reject(new Error('Could not read that image'))
-        reader.readAsDataURL(file)
-      })
-      try {
-        const uploaded = await api('/uploads/product-image', { method: 'POST', body: { dataUrl, name: body.id } })
-        body.image = uploaded.url
-      } catch (uploadErr) {
-        // Without storage configured the product still saves with a stock image.
-        toast(`${uploadErr.message} — saving without a photo`)
-      }
+    const photo = await uploadChosenPhoto(f.photo, id)
+    if (photo.url) body.image = photo.url
+
+    if (wasEditing) {
+      body.active = f.active.checked
+      await api(`/products/${encodeURIComponent(wasEditing)}`, { method: 'PATCH', body })
+    } else {
+      await api('/products', { method: 'POST', body: { ...body, id } })
     }
-    await api('/products', { method: 'POST', body })
-    closeProductModal()
-    f.reset()
-    toast(`${body.name} added — now live in the app`)
     loadProducts()
     loadOverview()
+
+    if (photo.error) {
+      // Everything except the picture saved. Keep the dialog open and say so
+      // inline, because a toast here is immediately replaced and missed.
+      f.photo.value = ''
+      err.textContent = `${body.name} saved, but the photo was not changed — ${photo.error}`
+      err.hidden = false
+      return
+    }
+
+    closeProductModal()
+    f.reset()
+    toast(wasEditing ? `${body.name} updated` : `${body.name} added — now live in the app`)
   } catch (e2) {
     err.textContent = e2.message
     err.hidden = false
+  } finally {
+    submit.disabled = false
   }
 })
 

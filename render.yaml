@@ -51,6 +51,15 @@ services:
         sync: false
       - key: RAZORPAY_WEBHOOK_SECRET
         sync: false
+      # Product photos: without these three the admin panel can edit every other
+      # product field, but changing a picture fails — Render's free tier has no
+      # persistent disk, so uploads have to live on a CDN. See INTEGRATIONS.md #5.
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
       # Restrict browser callers (comma-separated). Blank = allow all.
       - key: CORS_ORIGINS
         sync: false
