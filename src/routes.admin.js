@@ -197,7 +197,7 @@ router.get('/customers', async (_req, res) => {
       initials: initials(u.name),
       assignedRiderId: u.assigned_rider_id,
       assignedRiderName: u.rider_name || null,
-      recharges: recharges.map((r) => ({ date: new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }), amount: num(r.amount), mode: r.type === 'credit' ? 'Credit' : 'Debit' })),
+      recharges: recharges.map((r) => ({ date: new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }), amount: num(r.amount), mode: r.type === 'credit' ? 'Credit' : 'Debit', label: r.label })),
     })
   }
   res.json(out)
@@ -293,17 +293,29 @@ router.get('/riders', async (_req, res) => {
       (SELECT COUNT(*) FROM users c WHERE c.assigned_rider_id=u.id)::int AS customers
     FROM users u WHERE u.role='rider' ORDER BY u.approved, u.created_at
   `)
-  res.json(rows.map((u) => ({
-    id: u.id,
-    name: u.name,
-    mobile: `+91 ${String(u.phone).slice(-10)}`,
-    wallet: num(u.wallet_balance),
-    approved: Boolean(u.approved),
-    assigned: u.assigned,
-    delivered: u.delivered,
-    customers: u.customers,
-    initials: initials(u.name),
-  })))
+  const out = []
+  for (const u of rows) {
+    // Every self-added wallet adjustment carries the rider's own reason (see
+    // POST /wallet/topup) — surfaced here so a "we paid, you never added it"
+    // claim can be checked against what the rider actually logged.
+    const { rows: recharges } = await query(
+      `SELECT label, amount, type, created_at FROM transactions WHERE user_id=$1 ORDER BY created_at DESC, id DESC LIMIT 10`,
+      [u.id],
+    )
+    out.push({
+      id: u.id,
+      name: u.name,
+      mobile: `+91 ${String(u.phone).slice(-10)}`,
+      wallet: num(u.wallet_balance),
+      approved: Boolean(u.approved),
+      assigned: u.assigned,
+      delivered: u.delivered,
+      customers: u.customers,
+      initials: initials(u.name),
+      recharges: recharges.map((r) => ({ date: new Date(r.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }), amount: num(r.amount), mode: r.type === 'credit' ? 'Credit' : 'Debit', label: r.label })),
+    })
+  }
+  res.json(out)
 })
 
 // Approve (or revoke) a rider. Revoking also clears them from any customers.

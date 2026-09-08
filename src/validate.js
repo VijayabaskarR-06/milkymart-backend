@@ -36,6 +36,7 @@ export const schemas = {
   }),
   topup: z.object({
     amount: z.coerce.number().int().positive('Enter an amount greater than ₹0').max(50000, 'Maximum is ₹50,000 per top-up'),
+    note: z.string().trim().max(140).optional(),
   }),
   placeOrder: z.object({
     items: z
