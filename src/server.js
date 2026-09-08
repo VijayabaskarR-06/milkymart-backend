@@ -87,6 +87,9 @@ if (process.env.NODE_ENV === 'production') {
   const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 40, standardHeaders: true, legacyHeaders: false })
   app.use('/api/auth', authLimiter)
   app.use('/api/admin/login', authLimiter)
+  // A stolen-but-valid admin token shouldn't be enough to brute-force the
+  // current password out of /change-password either.
+  app.use('/api/admin/change-password', authLimiter)
 }
 
 app.get('/health', async (_req, res) => {
