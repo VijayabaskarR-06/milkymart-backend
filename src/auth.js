@@ -43,10 +43,22 @@ export const requireUser = async (req, res, next) => {
   }
 }
 
-// Authenticates an admin-panel session.
-export const requireAdmin = (req, res, next) => {
+// Authenticates an admin-panel session. Tokens carry the admin's
+// token_version; changing the password bumps that column, which signs every
+// other admin session out immediately — a real server-side logout, the same
+// guarantee /wallet/topup-style user sessions already get.
+export const requireAdmin = async (req, res, next) => {
   const claims = verifyToken(bearer(req))
   if (!claims || claims.kind !== 'admin') return res.status(401).json({ error: 'Admin auth required' })
-  req.admin = claims
-  next()
+  try {
+    const admin = await one('SELECT id, email, name, token_version FROM admins WHERE id=$1', [claims.id])
+    if (!admin) return res.status(401).json({ error: 'Admin account no longer exists' })
+    if ((claims.tv ?? 0) !== (admin.token_version ?? 0)) {
+      return res.status(401).json({ error: 'Session expired — please sign in again' })
+    }
+    req.admin = { id: admin.id, email: admin.email, name: admin.name }
+    next()
+  } catch (err) {
+    next(err)
+  }
 }
