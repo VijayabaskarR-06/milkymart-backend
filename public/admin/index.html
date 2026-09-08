@@ -74,6 +74,12 @@
           </span>
           <span class="nav-label">Order</span>
         </a>
+        <a href="#" class="nav-item" data-section="activity" title="Activity">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M3 12H7L10 20L14 4L17 12H21" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </span>
+          <span class="nav-label">Activity</span>
+        </a>
       </nav>
 
       <div class="sidebar-footer">
@@ -233,6 +239,35 @@
               </tr>
             </thead>
             <tbody id="orderTable"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ACTIVITY -->
+      <section class="section" id="section-activity">
+        <div class="section-head">
+          <div>
+            <h1>Activity</h1>
+            <p class="muted">Who changed what — wallet credits, product edits, rider approvals, order overrides, password changes.</p>
+          </div>
+          <div class="head-actions">
+            <button class="btn btn-ghost" id="refreshActivity">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M4 12A8 8 0 0116 5.3L20 9M20 4V9H15M20 12A8 8 0 018 18.7L4 15M4 20V15H9" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              Refresh
+            </button>
+          </div>
+        </div>
+        <div class="card no-pad" style="margin-top:20px">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>When</th>
+                <th>Admin</th>
+                <th>Action</th>
+                <th>Detail</th>
+              </tr>
+            </thead>
+            <tbody id="activityTable"></tbody>
           </table>
         </div>
       </section>

@@ -404,6 +404,52 @@ $('#productForm').addEventListener('submit', async (e) => {
 
 $('#refreshOrders')?.addEventListener('click', () => { loadOrders(); loadOverview(); toast('Refreshed') })
 
+/* ---------------- Activity (audit log) ---------------- */
+const ACTION_LABELS = {
+  'admin.password_changed': 'Changed admin password',
+  'demo.reset': 'Reset demo data',
+  'order.status_changed': 'Changed order status',
+  'product.created': 'Added product',
+  'product.updated': 'Edited product',
+  'product.deleted': 'Removed product',
+  'customer.wallet_adjusted': "Adjusted customer's wallet",
+  'customer.rider_assigned': 'Assigned delivery partner',
+  'rider.approved': 'Approved rider',
+  'rider.revoked': 'Revoked rider approval',
+}
+function describeActivity(a) {
+  const label = ACTION_LABELS[a.action] || a.action
+  const m = a.meta || {}
+  if (a.action === 'order.status_changed') return `Order #${a.targetId}: ${m.from} → ${m.to}`
+  if (a.action === 'customer.wallet_adjusted') return `Customer #${a.targetId}: ${m.amount > 0 ? '+' : ''}₹${m.amount} (${m.note || ''})`
+  if (a.action === 'customer.rider_assigned') return `Customer #${a.targetId} → rider ${m.riderId ?? 'unassigned'}`
+  if (a.targetType && a.targetId) return `${a.targetType} #${a.targetId}`
+  return label
+}
+let activityLoaded = false
+async function loadActivity() {
+  const tbody = $('#activityTable')
+  try {
+    const rows = await api('/audit-log?limit=200')
+    activityLoaded = true
+    if (!rows.length) {
+      tbody.innerHTML = '<tr class="row-empty"><td colspan="4">No admin activity recorded yet.</td></tr>'
+      return
+    }
+    tbody.innerHTML = rows.map((a) => `
+      <tr>
+        <td class="mono-cell">${escapeHtml(a.date)}</td>
+        <td>${escapeHtml(a.admin || '—')}</td>
+        <td>${escapeHtml(ACTION_LABELS[a.action] || a.action)}</td>
+        <td class="muted">${escapeHtml(describeActivity(a))}</td>
+      </tr>`).join('')
+  } catch (e) {
+    tbody.innerHTML = `<tr class="row-empty"><td colspan="4">${escapeHtml(e.message)}</td></tr>`
+  }
+}
+document.querySelector('.nav-item[data-section="activity"]')?.addEventListener('click', () => { if (!activityLoaded) loadActivity() })
+$('#refreshActivity')?.addEventListener('click', () => { loadActivity(); toast('Refreshed') })
+
 // The "Add user/rider" buttons are informational in this demo.
 document.querySelectorAll('#section-user .btn-primary, #section-rider .btn-primary').forEach((btn) =>
   btn.addEventListener('click', () => toast('Users and riders are created when they sign in to the app.')))

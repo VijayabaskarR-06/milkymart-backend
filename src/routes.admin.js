@@ -8,6 +8,7 @@ import { seedDatabase } from './migrate.js'
 import { validate, schemas, canTransition, allowedNext } from './validate.js'
 import { notifyUser } from './notify.js'
 import { log } from './logger.js'
+import { recordAudit } from './audit.js'
 
 const router = Router()
 const num = (v) => Number(v)
@@ -47,13 +48,34 @@ router.post('/change-password', validate(schemas.adminChangePassword), async (re
   )
   const token = signToken({ kind: 'admin', id: admin.id, email: admin.email, tv: rows[0].token_version })
   log.info('admin.password_changed', { admin: admin.id })
+  await recordAudit(req, 'admin.password_changed', { targetType: 'admin', targetId: admin.id })
   res.json({ ok: true, token })
 })
 
 // Restore the demo dataset (admin-only). Handy for showing a clean slate.
-router.post('/reset', async (_req, res) => {
+router.post('/reset', async (req, res) => {
   await seedDatabase({ force: true })
+  await recordAudit(req, 'demo.reset')
   res.json({ ok: true })
+})
+
+// Recent admin activity — wallet credits, product edits, rider approvals,
+// order overrides, password changes. Newest first.
+router.get('/audit-log', async (req, res) => {
+  const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 100, 1), 500)
+  const { rows } = await query(
+    `SELECT id, admin_email, action, target_type, target_id, meta, created_at
+     FROM admin_audit_log ORDER BY created_at DESC, id DESC LIMIT ${limit}`,
+  )
+  res.json(rows.map((r) => ({
+    id: r.id,
+    admin: r.admin_email,
+    action: r.action,
+    targetType: r.target_type,
+    targetId: r.target_id,
+    meta: r.meta,
+    date: new Date(r.created_at).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }),
+  })))
 })
 
 // ---- Dashboard KPIs ----------------------------------------------------------
@@ -135,6 +157,7 @@ router.patch('/orders/:id', validate(schemas.orderStatus), async (req, res) => {
     })
   }
   log.info('admin.order_status', { orderId: order.id, from: current.status, to: status })
+  await recordAudit(req, 'order.status_changed', { targetType: 'order', targetId: order.id, meta: { from: current.status, to: status } })
   res.json(adminOrder(order))
 })
 
@@ -168,6 +191,7 @@ router.post('/products', validate(schemas.product), async (req, res) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [String(id).toLowerCase().replace(/[^a-z0-9-]/g, '-'), name, size || '500 ml', price, mrp ?? price, category || 'Milk', badge || null, description || '', image || '/assets/images/milk1.png', stock ?? 100],
     )
+    await recordAudit(req, 'product.created', { targetType: 'product', targetId: row.id, meta: { name: row.name, price: num(row.price) } })
     res.status(201).json(adminProduct(row))
   } catch (err) {
     if (err.code === '23505') return res.status(409).json({ error: 'A product with that id already exists' })
@@ -189,11 +213,13 @@ router.patch('/products/:id', async (req, res) => {
   params.push(req.params.id)
   const row = await one(`UPDATE products SET ${sets.join(', ')} WHERE id=$${params.length} RETURNING *`, params)
   if (!row) return res.status(404).json({ error: 'Product not found' })
+  await recordAudit(req, 'product.updated', { targetType: 'product', targetId: row.id, meta: { fields: sets.map((s) => s.split(' ')[0]) } })
   res.json(adminProduct(row))
 })
 
 router.delete('/products/:id', async (req, res) => {
   await query('UPDATE products SET active=false WHERE id=$1', [req.params.id])
+  await recordAudit(req, 'product.deleted', { targetType: 'product', targetId: req.params.id })
   res.json({ ok: true })
 })
 
@@ -286,6 +312,7 @@ router.post('/customers/:id/wallet', async (req, res) => {
       body: amount > 0 ? `₹${amount} was added to your wallet.` : `₹${Math.abs(amount)} was deducted from your wallet.`,
     }).catch(() => {})
     log.info('admin.wallet_credit', { customer: req.params.id, amount })
+    await recordAudit(req, 'customer.wallet_adjusted', { targetType: 'customer', targetId: req.params.id, meta: { amount, note: label } })
     res.json({ ok: true, wallet: num(rows[0].wallet_balance) })
   } catch (err) {
     await client.query('ROLLBACK').catch(() => {})
@@ -306,6 +333,7 @@ router.post('/customers/:id/assign-rider', validate(schemas.assignRider), async 
   }
   const customer = await one(`UPDATE users SET assigned_rider_id=$1 WHERE id=$2 AND role='customer' RETURNING id`, [riderId, req.params.id])
   if (!customer) return res.status(404).json({ error: 'Customer not found' })
+  await recordAudit(req, 'customer.rider_assigned', { targetType: 'customer', targetId: req.params.id, meta: { riderId } })
   res.json({ ok: true })
 })
 
@@ -350,6 +378,7 @@ router.post('/riders/:id/approve', validate(schemas.approveRider), async (req, r
   if (!approved) {
     await query('UPDATE users SET assigned_rider_id=NULL WHERE assigned_rider_id=$1', [req.params.id])
   }
+  await recordAudit(req, approved ? 'rider.approved' : 'rider.revoked', { targetType: 'rider', targetId: req.params.id })
   res.json({ ok: true })
 })
 
