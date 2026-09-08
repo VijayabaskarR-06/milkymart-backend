@@ -171,7 +171,9 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     .then(() => seed())
     .then(() => {
       console.log('Seed complete.')
-      console.log(`  Admin login: ${process.env.ADMIN_EMAIL || 'admin@milkymart.app'} / ${process.env.ADMIN_PASSWORD || 'milkymart123'}`)
+      // Never echo the password — in production it may be the generated one, and
+      // boot logs are retained and easily shared.
+      console.log(`  Admin login: ${process.env.ADMIN_EMAIL || 'admin@milkymart.app'}`)
       console.log('  Demo customer phone: 9876543210 (any 6-digit OTP)')
       console.log('  Demo rider phone:    9998887770')
       return pool.end()
