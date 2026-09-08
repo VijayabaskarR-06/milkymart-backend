@@ -12,7 +12,18 @@ or services before this is a true production app.
 - **Idempotent orders** — an idempotency key per checkout; double-taps, retries
   and concurrent submits collapse to a single order (verified with 5 parallel requests).
 - **Real logout** — `token_version` on the user invalidates every token already
-  issued, so a stolen/old token stops working immediately.
+  issued, so a stolen/old token stops working immediately. Admin sessions work
+  the same way: an admin can change their own password from the panel, and it
+  signs out every other admin session at once.
+- **Phone sign-in is Firebase-only in production** — the demo OTP fallback
+  (any 6-digit code) is disabled once Firebase is configured, so the public API
+  can't be used to sign in as an arbitrary phone number.
+- **Wallet top-ups are rider-only** — customers cannot credit their own wallet
+  at all; they hand cash to a delivery partner and an admin credits it. Every
+  rider self-adjustment must carry a reason, recorded on the transaction.
+- **Admin audit log** — wallet credits, product edits, rider approvals, order
+  overrides, demo resets and password changes are all recorded with who did it
+  and when, visible under the panel's Activity tab.
 - **Order state machine** — orders can't move backwards or skip the delivery
   lifecycle; invalid transitions return 409 with the allowed next steps.
 - **Schema validation** — zod on every write endpoint, with consistent errors.
@@ -41,13 +52,15 @@ or services before this is a true production app.
 The code for all three is **already written and tested** — each one just needs
 credentials set as environment variables. Full step-by-step: [INTEGRATIONS.md](INTEGRATIONS.md).
 
-1. **Real OTP / SMS.** Login accepts *any* 6-digit code until `SMS_PROVIDER` +
-   credentials are set (MSG91 or Twilio). Code expiry, attempt limits and resend
-   cooldown are already implemented. **This is the most important one** — until
-   it's on, anyone can sign in as any phone number.
-2. **Payments.** Wallet top-ups credit instantly until `RAZORPAY_KEY_ID` /
-   `RAZORPAY_KEY_SECRET` are set. Order creation, signature verification,
-   idempotent crediting and the webhook are all built.
+1. **SMS OTP (optional now).** Phone sign-in runs on **Firebase phone auth**,
+   which is live and real. The backend's own SMS path (MSG91/Twilio) stays
+   unconfigured and its demo fallback is disabled in production, so this is no
+   longer a security gap — set `SMS_PROVIDER` only if you ever want to sign in
+   without Firebase (e.g. a browser build).
+2. **Payments.** Rider wallet adjustments credit instantly until
+   `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` are set. Customers can't self-credit
+   either way. Order creation, signature verification, idempotent crediting and
+   the webhook are all built.
 3. **Always-on hosting.** The free Render tier sleeps after ~15 min idle and its
    free Postgres **expires 90 days after creation with no backups**. Upgrade the
    database first.
@@ -61,10 +74,13 @@ credentials set as environment variables. Full step-by-step: [INTEGRATIONS.md](I
 
 ## Nice-to-have hardening
 
-- Per-user rate limits and request logging.
-- Admin roles / audit log.
-- Image uploads to object storage instead of bundled assets.
-- CI to run the test suite on every push.
+- ~~Per-user rate limits and request logging.~~ Done — `/orders` and
+  `/wallet/topup` are throttled per account (not just per IP) in production.
+- ~~Admin audit log.~~ Done — see the Activity tab.
+- Multiple admin accounts with roles (today there is a single admin login).
+- Image uploads to object storage instead of bundled assets (needs Cloudinary
+  credentials; the code is written and gated).
+- ~~CI to run the test suite on every push.~~ Done.
 
 ## Build the release APK yourself
 
