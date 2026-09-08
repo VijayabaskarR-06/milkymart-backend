@@ -191,20 +191,30 @@ router.get('/wallet', requireUser, async (req, res) => {
 // Demo mode credits instantly. With Razorpay keys configured the app must call
 // /wallet/topup/create then /wallet/topup/confirm with the signed result.
 router.post('/wallet/topup', requireUser, validate(schemas.topup), async (req, res) => {
-  const { amount } = req.valid
+  const { amount, note } = req.valid
   if (isLivePayments) {
     return res.status(409).json({
       error: 'Online payment required',
       requiresPayment: true,
     })
   }
+  // Riders self-credit their own earnings wallet, so every adjustment must carry
+  // a reason — it's the only record admin (and the customer it references) have
+  // that cash actually changed hands, and stops "we paid, you never added it"
+  // disputes later.
+  if (req.auth.role === 'rider' && !note) {
+    return res.status(400).json({ error: 'Add a reason for this adjustment' })
+  }
   const client = await pool.connect()
   try {
     await client.query('BEGIN')
-    const label = req.auth.role === 'rider' ? 'Wallet adjustment' : 'Wallet top-up'
+    const label = req.auth.role === 'rider' ? `Self-added: ${note}` : 'Wallet top-up'
     const { rows: u } = await client.query('UPDATE users SET wallet_balance = wallet_balance + $1 WHERE id=$2 RETURNING wallet_balance', [amount, req.auth.id])
     await client.query('INSERT INTO transactions (user_id, label, amount, type) VALUES ($1,$2,$3,$4)', [req.auth.id, label, amount, 'credit'])
     await client.query('COMMIT')
+    if (req.auth.role === 'rider') {
+      log.info('rider.wallet_self_adjustment', { rider: req.auth.id, amount, note })
+    }
     res.json({ balance: num(u[0].wallet_balance) })
   } catch (err) {
     await client.query('ROLLBACK')

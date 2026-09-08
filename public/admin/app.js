@@ -113,6 +113,7 @@ overlay.addEventListener('click', closeSidebar)
 
 /* ---------------- Data loading ---------------- */
 let customersCache = []
+let ridersCache = []
 
 async function loadAll() {
   await Promise.all([loadOverview(), loadOrders(), loadCustomers(), loadRiders(), loadProducts()])
@@ -216,7 +217,7 @@ async function loadCustomers() {
         <td class="right"><button class="btn-link" data-recharge="${i}">View (${u.recharges.length})</button></td>
       </tr>`).join('')
     tbody.querySelectorAll('[data-addmoney]').forEach((btn) => btn.addEventListener('click', () => addCustomerMoney(btn.dataset.addmoney, btn.dataset.name)))
-    tbody.querySelectorAll('[data-recharge]').forEach((btn) => btn.addEventListener('click', () => openRecharge(parseInt(btn.dataset.recharge, 10))))
+    tbody.querySelectorAll('[data-recharge]').forEach((btn) => btn.addEventListener('click', () => openRecharge(parseInt(btn.dataset.recharge, 10), 'customer')))
     tbody.querySelectorAll('[data-orders]').forEach((btn) => btn.addEventListener('click', () => openCustomerOrders(btn.dataset.orders)))
     tbody.querySelectorAll('.partner-select').forEach((sel) =>
       sel.addEventListener('change', async () => {
@@ -242,13 +243,15 @@ async function loadRiders() {
   const tbody = $('#riderTable')
   try {
     const riders = await api('/riders')
+    ridersCache = riders
     $('#riderCount').textContent = riders.length
-    tbody.innerHTML = riders.map((r) => `
+    tbody.innerHTML = riders.map((r, i) => `
       <tr>
         <td><div class="cust"><div class="avatar" style="background:#0f766e">${escapeHtml(r.initials)}</div><div class="cust-name">${escapeHtml(r.name)}</div></div></td>
         <td class="mono-cell">${escapeHtml(r.mobile)}</td>
         <td class="right"><strong class="num">${fmtNum(r.customers)}</strong></td>
         <td class="right"><strong class="num">${fmtNum(r.delivered)} / ${fmtNum(r.assigned)}</strong></td>
+        <td class="right"><span class="balance num">${fmtRupee(r.wallet)}</span> <button class="btn-link" data-rider-recharge="${i}">View (${r.recharges.length})</button></td>
         <td>
           ${r.approved
             ? `<span class="rider-badge approved">Approved</span>`
@@ -267,8 +270,9 @@ async function loadRiders() {
         }
       }),
     )
+    tbody.querySelectorAll('[data-rider-recharge]').forEach((btn) => btn.addEventListener('click', () => openRecharge(parseInt(btn.dataset.riderRecharge, 10), 'rider')))
   } catch (e) {
-    tbody.innerHTML = `<tr class="row-empty"><td colspan="5">${escapeHtml(e.message)}</td></tr>`
+    tbody.innerHTML = `<tr class="row-empty"><td colspan="6">${escapeHtml(e.message)}</td></tr>`
   }
 }
 
@@ -422,8 +426,8 @@ async function addCustomerMoney(customerId, name) {
 
 /* ---------------- Recharge modal ---------------- */
 const modal = $('#rechargeModal')
-function openRecharge(idx) {
-  const u = customersCache[idx]
+function openRecharge(idx, source = 'customer') {
+  const u = (source === 'rider' ? ridersCache : customersCache)[idx]
   if (!u) return
   const total = u.recharges.reduce((s, r) => s + (r.type === 'debit' ? -r.amount : r.amount), 0)
   $('#modalTitle').textContent = `${u.name}'s wallet activity`
@@ -435,7 +439,7 @@ function openRecharge(idx) {
           <div class="recharge-icon"><svg viewBox="0 0 24 24" fill="none"><path d="M12 5V19M5 12L12 19L19 12" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" transform="rotate(${r.mode === 'Debit' ? 0 : 180} 12 12)"/></svg></div>
           <div class="recharge-meta">
             <div class="recharge-amount">${r.mode === 'Debit' ? '−' : '+'} ₹${r.amount.toLocaleString('en-IN')}</div>
-            <div class="recharge-date">${escapeHtml(r.date)}</div>
+            <div class="recharge-date">${escapeHtml(r.label || '')} · ${escapeHtml(r.date)}</div>
           </div>
           <span class="recharge-mode">${escapeHtml(r.mode)}</span>
         </li>`).join('')}
