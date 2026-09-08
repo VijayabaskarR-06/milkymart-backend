@@ -1,4 +1,5 @@
 import { Router } from 'express'
+import rateLimit from 'express-rate-limit'
 import { pool, query, one } from './db.js'
 import { requireUser, signToken } from './auth.js'
 import { checkServiceArea } from './serviceArea.js'
@@ -11,6 +12,21 @@ import { log } from './logger.js'
 
 const router = Router()
 const num = (v) => Number(v)
+
+// Per-account throttling for sensitive writes — keyed by the authenticated
+// user, not IP, so a single compromised or scripted account can't hammer
+// these from many addresses. Only ever mounted after requireUser, so
+// req.auth is always set. Off outside production (matches the IP-based auth
+// limiter in server.js) so local dev and tests aren't rate-limited.
+const perUserLimiter = (max, windowMs = 15 * 60 * 1000) =>
+  rateLimit({
+    windowMs,
+    max,
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: () => process.env.NODE_ENV !== 'production',
+    keyGenerator: (req) => `user:${req.auth.id}`,
+  })
 
 // Shapes a DB user row into the session payload the app expects.
 const publicUser = (u) => ({
@@ -197,10 +213,17 @@ router.get('/wallet', requireUser, async (req, res) => {
   })
 })
 
-// Demo mode credits instantly. With Razorpay keys configured the app must call
-// /wallet/topup/create then /wallet/topup/confirm with the signed result.
-router.post('/wallet/topup', requireUser, validate(schemas.topup), async (req, res) => {
+// Rider-only: self-credits the rider's own earnings wallet (demo mode credits
+// instantly; with Razorpay configured, real payments go through
+// /wallet/topup/create + /wallet/topup/confirm instead). Customers are
+// deliberately excluded here even in demo mode — they top up by handing cash
+// to their delivery partner and having an admin credit it (POST
+// /admin/customers/:id/wallet), never by crediting themselves for free.
+router.post('/wallet/topup', requireUser, perUserLimiter(20), validate(schemas.topup), async (req, res) => {
   const { amount, note } = req.valid
+  if (req.auth.role !== 'rider') {
+    return res.status(403).json({ error: 'Hand cash to your delivery partner to add wallet balance.' })
+  }
   if (isLivePayments) {
     return res.status(409).json({
       error: 'Online payment required',
@@ -265,7 +288,7 @@ router.get('/orders/:id', requireUser, async (req, res) => {
   res.json(orderForApp(row))
 })
 
-router.post('/orders', requireUser, validate(schemas.placeOrder), async (req, res, next) => {
+router.post('/orders', requireUser, perUserLimiter(30), validate(schemas.placeOrder), async (req, res, next) => {
   const { items, address, slot, date, idempotencyKey } = req.valid
   const key = idempotencyKey || req.headers['idempotency-key'] || null
 
