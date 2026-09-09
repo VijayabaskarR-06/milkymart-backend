@@ -43,6 +43,20 @@ app.use(
 const allowOrigins = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean)
 const configuredSelf = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '')
 if (configuredSelf && !allowOrigins.includes(configuredSelf)) allowOrigins.push(configuredSelf)
+
+// The packaged mobile app is NOT an origin-less caller. Capacitor serves the web
+// bundle from a local webview origin — https://localhost on Android (its default
+// scheme), capacitor://localhost on iOS — so every request it makes is
+// cross-origin and carries that Origin header. Leaving these out locked the
+// shipped app out of the API completely, which surfaced in the app as
+// "Incorrect or expired OTP" because the Firebase token exchange was what failed.
+// These are safe to allow: a browser sets Origin itself and a website cannot
+// claim to be localhost, so only code running inside the app presents them.
+const NATIVE_APP_ORIGINS = ['https://localhost', 'capacitor://localhost', 'ionic://localhost', 'http://localhost']
+for (const origin of NATIVE_APP_ORIGINS) {
+  if (!allowOrigins.includes(origin)) allowOrigins.push(origin)
+}
+
 const lockCors = process.env.NODE_ENV === 'production'
 
 // The admin panel is served by this same server, and a same-origin POST (the
