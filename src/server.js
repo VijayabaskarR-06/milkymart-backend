@@ -39,21 +39,34 @@ app.use(
 // CORS: the native mobile app and server-to-server callers send no Origin, so
 // those are always allowed. Browser origins must appear in CORS_ORIGINS.
 // In production an unset CORS_ORIGINS means "no third-party site may script this
-// API" rather than "every site may" — same-origin callers like /admin/ send an
-// Origin matching PUBLIC_URL, so they are allowed explicitly below.
+// API" rather than "every site may".
 const allowOrigins = (process.env.CORS_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean)
-const selfOrigin = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '')
-if (selfOrigin && !allowOrigins.includes(selfOrigin)) allowOrigins.push(selfOrigin)
+const configuredSelf = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/$/, '')
+if (configuredSelf && !allowOrigins.includes(configuredSelf)) allowOrigins.push(configuredSelf)
 const lockCors = process.env.NODE_ENV === 'production'
 
+// The admin panel is served by this same server, and a same-origin POST (the
+// login) still carries an Origin header. Deriving "self" from the request host
+// rather than from an env var means the panel cannot be locked out of its own
+// API just because PUBLIC_URL/RENDER_EXTERNAL_URL was not set.
+const isSameOrigin = (origin, req) => {
+  const host = req.headers['x-forwarded-host'] || req.headers.host
+  if (!host) return false
+  try {
+    return new URL(origin).host === String(host).split(',')[0].trim()
+  } catch {
+    return false
+  }
+}
+
 app.use(
-  cors({
-    origin(origin, cb) {
-      if (!origin) return cb(null, true) // native app / curl / server-to-server
-      if (allowOrigins.includes(origin)) return cb(null, true)
-      if (!lockCors && allowOrigins.length === 0) return cb(null, true) // dev convenience
-      cb(new Error('Not allowed by CORS'))
-    },
+  cors((req, cb) => {
+    const origin = req.headers.origin
+    if (!origin) return cb(null, { origin: true }) // native app / curl / server-to-server
+    if (allowOrigins.includes(origin)) return cb(null, { origin: true })
+    if (isSameOrigin(origin, req)) return cb(null, { origin: true })
+    if (!lockCors && allowOrigins.length === 0) return cb(null, { origin: true }) // dev convenience
+    cb(null, { origin: false })
   }),
 )
 
