@@ -62,6 +62,13 @@
           </span>
           <span class="nav-label">Rider</span>
         </a>
+        <a href="#" class="nav-item" data-section="cash" title="Cash">
+          <span class="nav-icon">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M3 7H21V17H3V7Z" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/><circle cx="12" cy="12" r="2.5" stroke="currentColor" stroke-width="1.7"/></svg>
+          </span>
+          <span class="nav-label">Cash</span>
+          <span class="nav-badge" id="cashBadge" hidden>0</span>
+        </a>
         <a href="#" class="nav-item" data-section="product" title="Product">
           <span class="nav-icon">
             <svg viewBox="0 0 24 24" fill="none"><path d="M20 7L12 3L4 7M20 7L12 11M20 7V17L12 21M12 11L4 7M12 11V21M4 7V17L12 21" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -192,6 +199,24 @@
             <tbody id="riderTable"></tbody>
           </table>
         </div>
+      </section>
+
+      <!-- CASH PAYMENTS -->
+      <section class="section" id="section-cash">
+        <div class="section-head">
+          <div>
+            <h1>Cash payments</h1>
+            <p class="muted">Cash collected by riders. A customer's wallet is credited only when you approve it here.</p>
+          </div>
+          <div class="head-actions">
+            <label class="toggle-inline">
+              <input type="checkbox" id="cashShowAll" />
+              Show decided
+            </label>
+            <button class="btn btn-ghost" id="refreshCash">Refresh</button>
+          </div>
+        </div>
+        <div id="cashList" class="cash-list"></div>
       </section>
 
       <!-- PRODUCT -->

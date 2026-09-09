@@ -6,6 +6,7 @@ import { checkServiceArea } from './serviceArea.js'
 import { validate, schemas } from './validate.js'
 import { issueOtp, verifyOtp as checkOtp, isLiveOtp } from './otp.js'
 import { isLivePayments, createTopupOrder, confirmTopup } from './payments.js'
+import { runDueSubscriptions, subscriptionForApp } from './subscriptions.js'
 import { firebaseConfigured, verifyFirebaseIdToken } from './firebase.js'
 import { notifyUser } from './notify.js'
 import { log } from './logger.js'
@@ -138,6 +139,10 @@ router.delete('/devices/:token', requireUser, async (req, res) => {
 })
 
 router.get('/me', requireUser, async (req, res) => {
+  // Render's free plan has no cron, so the daily subscription run piggybacks on
+  // normal traffic. It is rate-limited to one pass a minute internally and is
+  // deliberately not awaited — a slow run must never delay this response.
+  runDueSubscriptions().catch(() => {})
   const user = await one('SELECT * FROM users WHERE id=$1', [req.auth.id])
   if (!user) return res.status(404).json({ error: 'User not found' })
   res.json({ user: publicUser(user) })
@@ -371,6 +376,118 @@ router.post('/notifications/read-all', requireUser, async (req, res) => {
   res.json({ ok: true })
 })
 
+// ---- Subscriptions (customer) ------------------------------------------------
+// A plan repeats the same basket daily and is billed one day at a time. See
+// src/subscriptions.js for the runner and why nothing is charged up front.
+router.get('/subscriptions', requireUser, async (req, res) => {
+  const { rows } = await query(
+    `SELECT * FROM subscriptions WHERE user_id=$1 AND status <> 'cancelled' ORDER BY created_at DESC`,
+    [req.auth.id],
+  )
+  res.json(rows.map(subscriptionForApp))
+})
+
+router.post('/subscriptions', requireUser, perUserLimiter(20), validate(schemas.subscribe), async (req, res, next) => {
+  const { items, address, slot } = req.valid
+  const area = checkServiceArea(address)
+  if (!area.ok) return res.status(422).json({ error: area.error })
+
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    // One active plan per customer keeps the daily run unambiguous — changing
+    // the basket means replacing the plan, not stacking a second one.
+    const existing = await client.query(
+      `SELECT id FROM subscriptions WHERE user_id=$1 AND status IN ('active','paused','insufficient') FOR UPDATE`,
+      [req.auth.id],
+    )
+    if (existing.rows.length) {
+      await client.query('ROLLBACK')
+      return res.status(409).json({ error: 'You already have a daily plan. Cancel it first to start a new one.' })
+    }
+
+    // Price from live products, never from the client.
+    let dailyTotal = 0
+    let itemCount = 0
+    const labels = []
+    for (const line of items) {
+      const product = await one('SELECT * FROM products WHERE id=$1 AND active=true', [line.id])
+      if (!product) throw httpError(400, `Product unavailable: ${line.id}`)
+      dailyTotal += Number(product.price) * line.quantity
+      itemCount += line.quantity
+      labels.push(`${line.quantity} × ${product.name}`)
+    }
+
+    const row = await client.query(
+      `INSERT INTO subscriptions (user_id, items, labels, daily_total, item_count, address, slot)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [req.auth.id, JSON.stringify(items), JSON.stringify(labels), dailyTotal, itemCount, address, slot],
+    )
+    await client.query('INSERT INTO notifications (user_id, title, body) VALUES ($1,$2,$3)', [
+      req.auth.id, 'Daily delivery started',
+      `We'll deliver ₹${dailyTotal} of milk every morning in your ${slot} slot, paid from your wallet each day.`,
+    ])
+    await client.query('COMMIT')
+    log.info('subscription.created', { userId: req.auth.id, dailyTotal })
+    // Deliver today straight away if the wallet allows, so the plan starts now
+    // rather than tomorrow morning.
+    runDueSubscriptions({ force: true }).catch(() => {})
+    res.status(201).json(subscriptionForApp(row.rows[0]))
+  } catch (err) {
+    await client.query('ROLLBACK')
+    if (err.status) return res.status(err.status).json({ error: err.message })
+    return next(err)
+  } finally {
+    client.release()
+  }
+})
+
+router.patch('/subscriptions/:id', requireUser, validate(schemas.subscriptionAction), async (req, res) => {
+  const sub = await one('SELECT * FROM subscriptions WHERE id=$1 AND user_id=$2', [req.params.id, req.auth.id])
+  if (!sub) return res.status(404).json({ error: 'Plan not found' })
+  if (sub.status === 'cancelled') return res.status(400).json({ error: 'That plan is already cancelled' })
+
+  const { action } = req.valid
+  // Resume returns the plan to 'active'; if the wallet is still short the next
+  // run moves it back to 'insufficient' on its own.
+  const next = action === 'pause' ? 'paused' : action === 'resume' ? 'active' : 'cancelled'
+  const updated = await one(
+    `UPDATE subscriptions SET status=$1, cancelled_at=CASE WHEN $1='cancelled' THEN now() ELSE cancelled_at END
+      WHERE id=$2 RETURNING *`,
+    [next, sub.id],
+  )
+  log.info('subscription.' + action, { subscriptionId: sub.id, userId: req.auth.id })
+  if (action === 'resume') runDueSubscriptions({ force: true }).catch(() => {})
+  res.json(subscriptionForApp(updated))
+})
+
+
+// Every rider route needs the same two checks; keeping them in one place means a
+// new rider route cannot accidentally skip the approval gate.
+async function requireApprovedRider(req, res, next) {
+  if (req.auth.role !== 'rider') return res.status(403).json({ error: 'Riders only' })
+  const me = await one('SELECT approved FROM users WHERE id=$1', [req.auth.id])
+  if (!me?.approved) return res.status(403).json({ error: 'Your account is pending admin approval', pending: true })
+  next()
+}
+
+function cashForApp(c) {
+  return {
+    id: c.id,
+    customerId: c.customer_id,
+    customer: c.customer_name,
+    riderId: c.rider_id,
+    rider: c.rider_name,
+    amount: num(c.amount),
+    note: c.note,
+    status: c.status,
+    createdAt: c.created_at,
+    decidedAt: c.decided_at,
+    decidedBy: c.decided_by_email,
+    decisionNote: c.decision_note,
+  }
+}
+
 // ---- Rider -------------------------------------------------------------------
 router.get('/rider/deliveries', requireUser, async (req, res) => {
   if (req.auth.role !== 'rider') return res.status(403).json({ error: 'Riders only' })
@@ -407,6 +524,76 @@ router.patch('/rider/deliveries/:id', requireUser, async (req, res) => {
   res.json(deliveryForApp(updated))
 })
 
+// ---- Rider cash collection ---------------------------------------------------
+// Cash handed over at the door is a *claim*, not a credit. The customer's wallet
+// only moves once an admin approves it, so a rider cannot top up an account by
+// typing a number, and a disputed handover has a record with both names on it.
+
+/** The customers this rider may collect from: anyone they have been assigned. */
+router.get('/rider/customers', requireUser, requireApprovedRider, async (req, res) => {
+  const { rows } = await query(
+    `SELECT DISTINCT u.id, u.name, u.phone, u.wallet_balance
+       FROM users u
+       JOIN orders o ON o.user_id = u.id
+      WHERE o.rider_id = $1 AND u.role = 'customer'
+      UNION
+     SELECT u.id, u.name, u.phone, u.wallet_balance
+       FROM users u
+      WHERE u.assigned_rider_id = $1 AND u.role = 'customer'`,
+    [req.auth.id],
+  )
+  res.json(rows.map((u) => ({ id: u.id, name: u.name, phone: u.phone, wallet: num(u.wallet_balance) })))
+})
+
+router.get('/rider/cash-collections', requireUser, requireApprovedRider, async (req, res) => {
+  const { rows } = await query(
+    `SELECT c.*, u.name AS customer_name FROM cash_collections c
+       JOIN users u ON u.id = c.customer_id
+      WHERE c.rider_id=$1 ORDER BY c.created_at DESC LIMIT 50`,
+    [req.auth.id],
+  )
+  res.json(rows.map(cashForApp))
+})
+
+router.post('/rider/cash-collections', requireUser, requireApprovedRider, perUserLimiter(60), validate(schemas.cashCollection), async (req, res, next) => {
+  const { customerId, amount, note, idempotencyKey } = req.valid
+
+  // Only against a customer this rider actually serves.
+  const allowed = await one(
+    `SELECT u.id, u.name FROM users u
+      WHERE u.id=$1 AND u.role='customer'
+        AND (u.assigned_rider_id=$2 OR EXISTS (SELECT 1 FROM orders o WHERE o.user_id=u.id AND o.rider_id=$2))`,
+    [customerId, req.auth.id],
+  )
+  if (!allowed) return res.status(403).json({ error: 'You can only record payments for your own customers' })
+
+  try {
+    const me = await one('SELECT name FROM users WHERE id=$1', [req.auth.id])
+    const row = await one(
+      `INSERT INTO cash_collections (customer_id, rider_id, rider_name, amount, note, idempotency_key)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [customerId, req.auth.id, me?.name || 'Delivery partner', amount, note || null, idempotencyKey || null],
+    )
+    await query('INSERT INTO notifications (user_id, title, body) VALUES ($1,$2,$3)', [
+      customerId, 'Cash payment recorded',
+      `₹${amount} was recorded by your delivery partner and is awaiting confirmation. Your wallet updates once it is approved.`,
+    ])
+    log.info('cash.recorded', { id: row.id, riderId: req.auth.id, customerId, amount })
+    res.status(201).json(cashForApp({ ...row, customer_name: allowed.name }))
+  } catch (err) {
+    // Same submission retried — hand back the original rather than a duplicate.
+    if (err.code === '23505' && idempotencyKey) {
+      const existing = await one(
+        `SELECT c.*, u.name AS customer_name FROM cash_collections c JOIN users u ON u.id=c.customer_id
+          WHERE c.rider_id=$1 AND c.idempotency_key=$2`,
+        [req.auth.id, idempotencyKey],
+      )
+      if (existing) return res.status(200).json(cashForApp(existing))
+    }
+    return next(err)
+  }
+})
+
 // ---- helpers -----------------------------------------------------------------
 function httpError(status, message) {
   const e = new Error(message)
@@ -430,6 +617,10 @@ function orderForApp(o) {
     itemCount: o.item_count,
     items: Array.isArray(o.items) ? o.items : [],
     address: o.address || '',
+    // 'Wallet' is debited when the order is placed; 'Cash on delivery' is not
+    // paid until the rider collects it. The app needs this to avoid telling a
+    // customer they have paid for an order they still owe cash on.
+    payment: o.payment || 'Cash on delivery',
   }
 }
 

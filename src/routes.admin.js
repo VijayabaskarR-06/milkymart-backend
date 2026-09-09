@@ -9,6 +9,7 @@ import { validate, schemas, canTransition, allowedNext } from './validate.js'
 import { notifyUser } from './notify.js'
 import { log } from './logger.js'
 import { recordAudit } from './audit.js'
+import { runDueSubscriptions } from './subscriptions.js'
 
 const router = Router()
 const num = (v) => Number(v)
@@ -80,6 +81,7 @@ router.get('/audit-log', async (req, res) => {
 
 // ---- Dashboard KPIs ----------------------------------------------------------
 router.get('/overview', async (_req, res) => {
+  runDueSubscriptions().catch(() => {})
   const totals = await one(`
     SELECT
       (SELECT COUNT(*) FROM orders)::int AS total_orders,
@@ -220,6 +222,111 @@ router.patch('/products/:id', async (req, res) => {
 router.delete('/products/:id', async (req, res) => {
   await query('UPDATE products SET active=false WHERE id=$1', [req.params.id])
   await recordAudit(req, 'product.deleted', { targetType: 'product', targetId: req.params.id })
+  res.json({ ok: true })
+})
+
+// ---- Pending cash payments ---------------------------------------------------
+// Riders record cash taken at the door; nothing reaches a customer's wallet
+// until an admin approves it here. Approval is the only path that credits.
+router.get('/cash-collections', async (req, res) => {
+  const status = ['pending', 'approved', 'rejected'].includes(req.query.status) ? req.query.status : null
+  const { rows } = await query(
+    `SELECT c.*, u.name AS customer_name, u.phone AS customer_phone, u.wallet_balance
+       FROM cash_collections c
+       JOIN users u ON u.id = c.customer_id
+      ${status ? 'WHERE c.status = $1' : ''}
+      ORDER BY c.created_at DESC LIMIT 200`,
+    status ? [status] : [],
+  )
+  res.json(rows.map((c) => ({
+    id: c.id,
+    customerId: c.customer_id,
+    customer: c.customer_name,
+    customerPhone: c.customer_phone,
+    customerWallet: num(c.wallet_balance),
+    rider: c.rider_name,
+    riderId: c.rider_id,
+    amount: num(c.amount),
+    note: c.note,
+    status: c.status,
+    createdAt: c.created_at,
+    decidedAt: c.decided_at,
+    decidedBy: c.decided_by_email,
+    decisionNote: c.decision_note,
+  })))
+})
+
+router.post('/cash-collections/:id/approve', validate(schemas.cashDecision), async (req, res, next) => {
+  const client = await pool.connect()
+  try {
+    await client.query('BEGIN')
+    // Lock the claim before reading its status: two admins hitting approve at
+    // the same moment must not both credit the wallet.
+    const { rows } = await client.query('SELECT * FROM cash_collections WHERE id=$1 FOR UPDATE', [req.params.id])
+    const claim = rows[0]
+    if (!claim) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Payment not found' }) }
+    if (claim.status !== 'pending') {
+      await client.query('ROLLBACK')
+      return res.status(409).json({ error: `This payment was already ${claim.status}` })
+    }
+
+    const amount = Number(claim.amount)
+    const { rows: userRows } = await client.query(
+      `UPDATE users SET wallet_balance = wallet_balance + $1 WHERE id=$2 AND role='customer' RETURNING id, name, wallet_balance`,
+      [amount, claim.customer_id],
+    )
+    if (!userRows.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Customer not found' }) }
+
+    const tx = await client.query(
+      `INSERT INTO transactions (user_id, label, amount, type) VALUES ($1,$2,$3,'credit') RETURNING id`,
+      [claim.customer_id, `Cash paid to ${claim.rider_name || 'delivery partner'}`, amount],
+    )
+    await client.query(
+      `UPDATE cash_collections
+          SET status='approved', transaction_id=$1, decided_at=now(), decided_by=$2, decided_by_email=$3, decision_note=$4
+        WHERE id=$5`,
+      [tx.rows[0].id, req.admin?.id ?? null, req.admin?.email ?? null, req.body?.note || null, claim.id],
+    )
+    await client.query('INSERT INTO notifications (user_id, title, body) VALUES ($1,$2,$3)', [
+      claim.customer_id, 'Wallet topped up', `₹${amount} has been added to your wallet.`,
+    ])
+    await client.query('COMMIT')
+
+    notifyUser(claim.customer_id, { title: 'Wallet topped up', body: `₹${amount} has been added to your wallet.` }).catch(() => {})
+    log.info('cash.approved', { id: claim.id, customerId: claim.customer_id, amount })
+    await recordAudit(req, 'cash.approved', {
+      targetType: 'cash_collection', targetId: claim.id,
+      meta: { customerId: claim.customer_id, riderId: claim.rider_id, amount },
+    })
+    // A paused plan can start again the moment the balance lands.
+    runDueSubscriptions({ force: true }).catch(() => {})
+    res.json({ ok: true, balance: num(userRows[0].wallet_balance) })
+  } catch (err) {
+    await client.query('ROLLBACK')
+    return next(err)
+  } finally {
+    client.release()
+  }
+})
+
+router.post('/cash-collections/:id/reject', validate(schemas.cashDecision), async (req, res) => {
+  const claim = await one('SELECT * FROM cash_collections WHERE id=$1', [req.params.id])
+  if (!claim) return res.status(404).json({ error: 'Payment not found' })
+  if (claim.status !== 'pending') return res.status(409).json({ error: `This payment was already ${claim.status}` })
+
+  await query(
+    `UPDATE cash_collections SET status='rejected', decided_at=now(), decided_by=$1, decided_by_email=$2, decision_note=$3 WHERE id=$4`,
+    [req.admin?.id ?? null, req.admin?.email ?? null, req.body?.note || null, claim.id],
+  )
+  await query('INSERT INTO notifications (user_id, title, body) VALUES ($1,$2,$3)', [
+    claim.customer_id, 'Cash payment not confirmed',
+    `The ₹${num(claim.amount)} recorded by your delivery partner could not be confirmed. Please contact support.`,
+  ])
+  log.info('cash.rejected', { id: claim.id })
+  await recordAudit(req, 'cash.rejected', {
+    targetType: 'cash_collection', targetId: claim.id,
+    meta: { customerId: claim.customer_id, riderId: claim.rider_id, amount: num(claim.amount), note: req.body?.note || null },
+  })
   res.json({ ok: true })
 })
 

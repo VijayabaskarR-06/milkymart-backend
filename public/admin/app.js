@@ -137,8 +137,50 @@ navItems.forEach((item) => {
     if (crumb) crumb.textContent = item.querySelector('.nav-label').textContent
     if (window.innerWidth <= 820) closeSidebar()
     window.scrollTo({ top: 0, behavior: 'smooth' })
+    // Show current data the moment a section is opened, not whatever was
+    // fetched when the panel first loaded.
+    refreshSection(id)
   })
 })
+
+/* ---------------- Keeping the panel in step ---------------- */
+// The panel had no auto-refresh at all: an order placed in the app, or cash a
+// rider just recorded, only appeared after a manual page reload. Refresh the
+// section being looked at every 6s, and always keep the pending-cash badge
+// current so it is visible from any screen. Paused while the tab is hidden.
+const SECTION_LOADERS = {
+  home: () => Promise.all([loadOverview(), loadOrders()]),
+  user: loadCustomers,
+  rider: loadRiders,
+  cash: loadCash,
+  product: loadProducts,
+  order: loadOrders,
+  activity: () => (typeof loadActivity === 'function' ? loadActivity() : Promise.resolve()),
+}
+
+function currentSection() {
+  return document.querySelector('.nav-item.active')?.dataset.section || 'home'
+}
+
+function refreshSection(id = currentSection()) {
+  return Promise.resolve(SECTION_LOADERS[id]?.()).catch(() => {})
+}
+
+// loadAll() runs again after a sign-out/sign-in, so without this guard each
+// cycle would leave another timer running against the same endpoints.
+let autoRefreshTimer = null
+function startAutoRefresh() {
+  if (autoRefreshTimer) return
+  autoRefreshTimer = setInterval(() => {
+    if (document.hidden || !token) return
+    refreshSection()
+    // Cheap, and the badge is how an admin learns there is anything to approve.
+    if (currentSection() !== 'cash') loadCash().catch(() => {})
+  }, 6000)
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden && token) refreshSection()
+  })
+}
 
 /* ---------------- Sidebar toggle ---------------- */
 const appEl = $('#app')
@@ -159,7 +201,8 @@ let customersCache = []
 let ridersCache = []
 
 async function loadAll() {
-  await Promise.all([loadOverview(), loadOrders(), loadCustomers(), loadRiders(), loadProducts()])
+  await Promise.all([loadOverview(), loadOrders(), loadCustomers(), loadRiders(), loadProducts(), loadCash()])
+  startAutoRefresh()
 }
 
 async function loadOverview() {
@@ -381,6 +424,88 @@ $('#showHidden')?.addEventListener('change', loadProducts)
 $('#productGrid')?.addEventListener('click', (e) => {
   const card = e.target.closest('[data-edit-product]')
   if (card) openProductModal(productsById.get(card.dataset.editProduct))
+})
+
+/* ---------------- Cash payments awaiting approval ---------------- */
+// Riders record cash taken at the door; it sits here until an admin decides.
+// Approving is the only path that credits a customer's wallet.
+async function loadCash() {
+  const list = $('#cashList')
+  const showAll = $('#cashShowAll')?.checked
+  try {
+    const rows = await api(showAll ? '/cash-collections' : '/cash-collections?status=pending')
+    const pending = rows.filter((r) => r.status === 'pending')
+
+    // The badge is the whole point of the section — an unapproved payment is a
+    // customer who cannot get milk, so it has to be visible from any screen.
+    const badge = $('#cashBadge')
+    if (badge) {
+      badge.textContent = pending.length
+      badge.hidden = pending.length === 0
+    }
+
+    if (!rows.length) {
+      list.innerHTML = `<p class="muted">${showAll ? 'No cash payments recorded yet.' : 'Nothing waiting for approval.'}</p>`
+      return
+    }
+
+    list.innerHTML = rows.map((r) => {
+      const when = new Date(r.createdAt).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: 'numeric', minute: '2-digit' })
+      const decided = r.status !== 'pending'
+      return `
+      <article class="cash-row cash-${escapeHtml(r.status)}">
+        <div class="cash-main">
+          <div class="cash-amount">${fmtRupee(r.amount)}</div>
+          <div class="cash-detail">
+            <strong>${escapeHtml(r.customer)}</strong>
+            <span class="muted">${escapeHtml(r.customerPhone || '')} · wallet ${fmtRupee(r.customerWallet)}</span>
+            <span class="muted">Collected by ${escapeHtml(r.rider || 'unknown rider')} · ${escapeHtml(when)}</span>
+            ${r.note ? `<span class="cash-note">“${escapeHtml(r.note)}”</span>` : ''}
+            ${decided ? `<span class="muted">${escapeHtml(r.status)} by ${escapeHtml(r.decidedBy || 'admin')}</span>` : ''}
+          </div>
+        </div>
+        ${decided
+          ? `<span class="pill ${r.status === 'approved' ? 'pill-green' : 'pill-red'}">${escapeHtml(r.status)}</span>`
+          : `<div class="cash-actions">
+               <button class="btn btn-primary" data-cash-approve="${r.id}">Approve</button>
+               <button class="btn btn-ghost" data-cash-reject="${r.id}">Reject</button>
+             </div>`}
+      </article>`
+    }).join('')
+  } catch (e) {
+    list.innerHTML = `<p class="muted">${escapeHtml(e.message)}</p>`
+  }
+}
+
+$('#cashShowAll')?.addEventListener('change', loadCash)
+$('#refreshCash')?.addEventListener('click', () => { loadCash(); toast('Refreshed') })
+
+$('#cashList')?.addEventListener('click', async (e) => {
+  // Distinct from the rider table's data-approve/data-reject, which already
+  // exist elsewhere in this panel.
+  const approve = e.target.closest('[data-cash-approve]')
+  const reject = e.target.closest('[data-cash-reject]')
+  if (!approve && !reject) return
+  const id = approve ? approve.dataset.cashApprove : reject.dataset.cashReject
+  const button = approve || reject
+
+  if (reject) {
+    const note = prompt('Why is this payment being rejected? (optional)')
+    if (note === null) return // cancelled the dialog
+    button.disabled = true
+    try {
+      await api(`/cash-collections/${id}/reject`, { method: 'POST', body: { note: note || undefined } })
+      toast('Payment rejected')
+    } catch (e2) { toast(e2.message) } finally { button.disabled = false }
+  } else {
+    button.disabled = true
+    try {
+      const { balance } = await api(`/cash-collections/${id}/approve`, { method: 'POST', body: {} })
+      toast(`Approved — wallet now ${fmtRupee(balance)}`)
+    } catch (e2) { toast(e2.message) } finally { button.disabled = false }
+  }
+  // Both the queue and the customer balances shown elsewhere have moved.
+  loadCash(); loadCustomers(); loadOverview()
 })
 
 /* ---------------- Add / edit product ---------------- */

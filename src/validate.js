@@ -38,6 +38,28 @@ export const schemas = {
     amount: z.coerce.number().int().positive('Enter an amount greater than ₹0').max(50000, 'Maximum is ₹50,000 per top-up'),
     note: z.string().trim().max(140).optional(),
   }),
+  subscribe: z.object({
+    items: z.array(z.object({
+      id: z.string().min(1),
+      quantity: z.number().int().min(1).max(99),
+    })).min(1, 'Add at least one product'),
+    address: z.string().min(4, 'Choose a delivery address'),
+    slot: z.string().min(3, 'Choose a delivery slot'),
+  }),
+  subscriptionAction: z.object({
+    action: z.enum(['pause', 'resume', 'cancel']),
+  }),
+  cashCollection: z.object({
+    customerId: z.coerce.number().int().positive(),
+    // Matches the wallet cap elsewhere; a doorstep cash payment above this is
+    // far more likely to be a typo than a real handover.
+    amount: z.coerce.number().int().positive().max(50000, 'Maximum is ₹50,000 per collection'),
+    note: z.string().max(140).optional(),
+    idempotencyKey: z.string().max(80).optional(),
+  }),
+  cashDecision: z.object({
+    note: z.string().max(140).optional(),
+  }),
   placeOrder: z.object({
     items: z
       .array(
