@@ -529,20 +529,87 @@ router.patch('/rider/deliveries/:id', requireUser, async (req, res) => {
 // only moves once an admin approves it, so a rider cannot top up an account by
 // typing a number, and a disputed handover has a record with both names on it.
 
-/** The customers this rider may collect from: anyone they have been assigned. */
+// Any approved rider may serve any customer, so the list is every registered
+// customer. lastRider is who most recently deducted from them.
+const LOW_FUND_LIMIT = 50
+
 router.get('/rider/customers', requireUser, requireApprovedRider, async (req, res) => {
   const { rows } = await query(
-    `SELECT DISTINCT u.id, u.name, u.phone, u.wallet_balance
+    `SELECT u.id, u.name, u.phone, u.wallet_balance,
+            (SELECT d.rider_name FROM delivery_charges d WHERE d.customer_id=u.id ORDER BY d.created_at DESC LIMIT 1) AS last_rider
        FROM users u
-       JOIN orders o ON o.user_id = u.id
-      WHERE o.rider_id = $1 AND u.role = 'customer'
-      UNION
-     SELECT u.id, u.name, u.phone, u.wallet_balance
-       FROM users u
-      WHERE u.assigned_rider_id = $1 AND u.role = 'customer'`,
+      WHERE u.role = 'customer'
+      ORDER BY u.name NULLS LAST, u.id`,
+  )
+  res.json(rows.map((u) => ({
+    id: u.id, name: u.name, phone: u.phone, wallet: num(u.wallet_balance),
+    lowFund: num(u.wallet_balance) < LOW_FUND_LIMIT, lastRider: u.last_rider || null,
+  })))
+})
+
+function chargeForApp(c) {
+  return { id: c.id, customerId: c.customer_id, customer: c.customer_name, rider: c.rider_name, amount: num(c.amount), note: c.note, createdAt: c.created_at }
+}
+
+router.get('/rider/delivery-charges', requireUser, requireApprovedRider, async (req, res) => {
+  const { rows } = await query(
+    `SELECT d.*, u.name AS customer_name FROM delivery_charges d JOIN users u ON u.id = d.customer_id
+      WHERE d.rider_id=$1 ORDER BY d.created_at DESC LIMIT 50`,
     [req.auth.id],
   )
-  res.json(rows.map((u) => ({ id: u.id, name: u.name, phone: u.phone, wallet: num(u.wallet_balance) })))
+  res.json(rows.map(chargeForApp))
+})
+
+// Debits the wallet immediately. The balance check and the debit are one
+// UPDATE, so two riders charging at once cannot overdraw the wallet.
+router.post('/rider/delivery-charges', requireUser, requireApprovedRider, perUserLimiter(120), validate(schemas.cashCollection), async (req, res, next) => {
+  const { customerId, amount, note, idempotencyKey } = req.valid
+  const client = await pool.connect()
+  try {
+    const me = await one('SELECT name FROM users WHERE id=$1', [req.auth.id])
+    const riderName = me?.name || 'Delivery partner'
+    await client.query('BEGIN')
+    const { rows } = await client.query(
+      `UPDATE users SET wallet_balance = wallet_balance - $1
+        WHERE id=$2 AND role='customer' AND wallet_balance >= $1
+        RETURNING id, name, wallet_balance`,
+      [amount, customerId],
+    )
+    if (!rows.length) {
+      await client.query('ROLLBACK')
+      const cust = await one(`SELECT wallet_balance FROM users WHERE id=$1 AND role='customer'`, [customerId])
+      if (!cust) return res.status(404).json({ error: 'Customer not found' })
+      return res.status(402).json({ error: `Insufficient fund — wallet has only ₹${num(cust.wallet_balance)}` })
+    }
+    const tx = await client.query(
+      `INSERT INTO transactions (user_id, label, amount, type) VALUES ($1,$2,$3,'debit') RETURNING id`,
+      [customerId, `Delivery by ${riderName}${note ? ` — ${note}` : ''}`, amount],
+    )
+    const row = (await client.query(
+      `INSERT INTO delivery_charges (customer_id, rider_id, rider_name, amount, note, transaction_id, idempotency_key)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [customerId, req.auth.id, riderName, amount, note || null, tx.rows[0].id, idempotencyKey || null],
+    )).rows[0]
+    await client.query('INSERT INTO notifications (user_id, title, body) VALUES ($1,$2,$3)', [
+      customerId, 'Wallet debited', `₹${amount} was deducted for a delivery by ${riderName}.`,
+    ])
+    await client.query('COMMIT')
+    notifyUser(customerId, { title: 'Wallet debited', body: `₹${amount} was deducted for a delivery by ${riderName}.` }).catch(() => {})
+    log.info('delivery.charged', { id: row.id, riderId: req.auth.id, customerId, amount })
+    res.status(201).json({ ...chargeForApp({ ...row, customer_name: rows[0].name }), balance: num(rows[0].wallet_balance) })
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {})
+    if (err.code === '23505' && idempotencyKey) {
+      const existing = await one(
+        `SELECT d.*, u.name AS customer_name FROM delivery_charges d JOIN users u ON u.id=d.customer_id WHERE d.rider_id=$1 AND d.idempotency_key=$2`,
+        [req.auth.id, idempotencyKey],
+      )
+      if (existing) return res.status(200).json(chargeForApp(existing))
+    }
+    return next(err)
+  } finally {
+    client.release()
+  }
 })
 
 router.get('/rider/cash-collections', requireUser, requireApprovedRider, async (req, res) => {
@@ -558,14 +625,8 @@ router.get('/rider/cash-collections', requireUser, requireApprovedRider, async (
 router.post('/rider/cash-collections', requireUser, requireApprovedRider, perUserLimiter(60), validate(schemas.cashCollection), async (req, res, next) => {
   const { customerId, amount, note, idempotencyKey } = req.valid
 
-  // Only against a customer this rider actually serves.
-  const allowed = await one(
-    `SELECT u.id, u.name FROM users u
-      WHERE u.id=$1 AND u.role='customer'
-        AND (u.assigned_rider_id=$2 OR EXISTS (SELECT 1 FROM orders o WHERE o.user_id=u.id AND o.rider_id=$2))`,
-    [customerId, req.auth.id],
-  )
-  if (!allowed) return res.status(403).json({ error: 'You can only record payments for your own customers' })
+  const allowed = await one(`SELECT id, name FROM users WHERE id=$1 AND role='customer'`, [customerId])
+  if (!allowed) return res.status(404).json({ error: 'Customer not found' })
 
   try {
     const me = await one('SELECT name FROM users WHERE id=$1', [req.auth.id])

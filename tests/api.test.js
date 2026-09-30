@@ -191,6 +191,86 @@ describe('riders', () => {
   })
 })
 
+describe('rider delivery charges', () => {
+  const fresh = () => `9${String(Date.now() + Math.floor(Math.random() * 1e6)).slice(-9)}`
+  const balanceOf = async (c) => (await call('/api/wallet', { token: c.token })).data.balance
+  const listFor = async (rider) => (await call('/api/rider/customers', { token: rider.token })).data
+  let rider, custA, custB
+
+  before(async () => {
+    const phone = fresh()
+    rider = await login(phone, 'rider')
+    const listed = (await call('/api/admin/riders', { token: admin.token })).data.find((r) => r.mobile.includes(phone.slice(-10)))
+    await call(`/api/admin/riders/${listed.id}/approve`, { method: 'POST', token: admin.token, body: { approved: true } })
+    custA = await login(fresh())
+    custB = await login(fresh())
+    const claim = await call('/api/rider/cash-collections', { method: 'POST', token: rider.token, body: { customerId: custA.user.id, amount: 100 } })
+    assert.equal(claim.status, 201)
+    const ok = await call(`/api/admin/cash-collections/${claim.data.id}/approve`, { method: 'POST', token: admin.token, body: {} })
+    assert.equal(ok.status, 200)
+  })
+
+  test('an unassigned rider sees every customer, with low-fund flags', async () => {
+    const list = await listFor(rider)
+    const a = list.find((c) => c.id === custA.user.id)
+    const b = list.find((c) => c.id === custB.user.id)
+    assert.ok(a && b, 'customers this rider has never served must be listed')
+    assert.equal(a.lowFund, false)
+    assert.equal(b.lowFund, true)
+    assert.equal(b.lastRider, null)
+  })
+
+  test('a deduction lowers the wallet and names the rider', async () => {
+    const before = await balanceOf(custA)
+    const r = await call('/api/rider/delivery-charges', { method: 'POST', token: rider.token, body: { customerId: custA.user.id, amount: 30, note: '2 x milk' } })
+    assert.equal(r.status, 201)
+    assert.equal(await balanceOf(custA), before - 30)
+    const tx = (await call('/api/wallet', { token: custA.token })).data.transactions[0]
+    assert.match(tx.label, /Delivery by/)
+    const a = (await listFor(rider)).find((c) => c.id === custA.user.id)
+    assert.ok(a.lastRider)
+    const mine = (await call('/api/rider/delivery-charges', { token: rider.token })).data
+    assert.equal(mine[0].amount, 30)
+  })
+
+  test('insufficient balance is refused and nothing is deducted', async () => {
+    const before = await balanceOf(custA)
+    const r = await call('/api/rider/delivery-charges', { method: 'POST', token: rider.token, body: { customerId: custA.user.id, amount: before + 1 } })
+    assert.equal(r.status, 402)
+    assert.match(r.data.error, /Insufficient fund/)
+    assert.equal(await balanceOf(custA), before)
+    const empty = await call('/api/rider/delivery-charges', { method: 'POST', token: rider.token, body: { customerId: custB.user.id, amount: 10 } })
+    assert.equal(empty.status, 402)
+  })
+
+  test('two riders charging at once cannot overdraw the wallet', async () => {
+    const before = await balanceOf(custA)
+    const amount = Math.floor(before * 0.6)
+    const results = await Promise.all([1, 2, 3].map(() =>
+      call('/api/rider/delivery-charges', { method: 'POST', token: rider.token, body: { customerId: custA.user.id, amount } })))
+    assert.equal(results.filter((r) => r.status === 201).length, 1)
+    assert.equal(await balanceOf(custA), before - amount)
+  })
+
+  test('a retried submission with the same key charges once', async () => {
+    const before = await balanceOf(custA)
+    const body = { customerId: custA.user.id, amount: 5, idempotencyKey: 'same-key-1' }
+    const one = await call('/api/rider/delivery-charges', { method: 'POST', token: rider.token, body })
+    const two = await call('/api/rider/delivery-charges', { method: 'POST', token: rider.token, body })
+    assert.equal(one.status, 201)
+    assert.equal(two.status, 200)
+    assert.equal(await balanceOf(custA), before - 5)
+  })
+
+  test('customers and unknown ids are rejected; cash can be recorded for any customer', async () => {
+    assert.equal((await call('/api/rider/delivery-charges', { method: 'POST', token: custA.token, body: { customerId: custB.user.id, amount: 5 } })).status, 403)
+    assert.equal((await call('/api/rider/delivery-charges', { method: 'POST', token: rider.token, body: { customerId: 99999999, amount: 5 } })).status, 404)
+    assert.equal((await call('/api/rider/delivery-charges', { method: 'POST', token: rider.token, body: { customerId: custB.user.id, amount: -5 } })).status, 400)
+    const cash = await call('/api/rider/cash-collections', { method: 'POST', token: rider.token, body: { customerId: custB.user.id, amount: 200 } })
+    assert.equal(cash.status, 201)
+  })
+})
+
 describe('admin', () => {
   test('orders are paginated', async () => {
     const page = await call('/api/admin/orders?limit=2', { token: admin.token })
