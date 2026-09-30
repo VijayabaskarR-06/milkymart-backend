@@ -13,6 +13,15 @@ The app and the admin panel share one database, so an order placed in the app
 appears in the admin instantly, and a status change in the admin flows back to
 the customer.
 
+## Download & links
+
+- **Android app (latest APK):** https://github.com/VijayabaskarR-06/milkymart-backend/releases/latest/download/MilkyMart.apk
+- **All app releases:** https://github.com/VijayabaskarR-06/milkymart-backend/releases
+- **API:** https://milkymart-daily-api.onrender.com
+- **Admin panel:** https://milkymart-daily-api.onrender.com/admin/
+- **App code:** https://github.com/VijayabaskarR-06/milkymart-app
+- **Backend code:** https://github.com/VijayabaskarR-06/milkymart-backend
+
 ## Demo credentials
 
 - **Admin:** `admin@milkymart.app` / `milkymart123`
